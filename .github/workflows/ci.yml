@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  swiftpm:
+    name: SwiftPM Checks
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build
+
+      - name: Run project checks
+        run: swift run ZeroFSManagerChecks
+
+      - name: Check shell script syntax
+        run: |
+          bash -n \
+            Scripts/build-app.sh \
+            Scripts/inspect-signature.sh \
+            Scripts/manual-install-launchdaemon-debug.sh \
+            Scripts/manual-mount-test.sh \
+            Scripts/manual-performance-test.sh \
+            Scripts/manual-uninstall-launchdaemon-debug.sh \
+            Scripts/notarize-dmg.sh \
+            Scripts/package-github-dev.sh \
+            Scripts/sign-app-adhoc.sh \
+            Scripts/sign-app-developer-id.sh \
+            Scripts/sign-notarize-staple.sh \
+            Scripts/verify-bundle.sh \
+            Scripts/verify-local.sh \
+            Scripts/verify-release.sh
+
+      - name: Validate OpenSpec when available
+        run: |
+          if command -v openspec >/dev/null 2>&1; then
+            openspec validate build-distributable-zerofs-manager --strict
+          else
+            echo "openspec is not installed on this runner; skipping spec validation."
+          fi

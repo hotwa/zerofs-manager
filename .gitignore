@@ -1,0 +1,56 @@
+# macOS / editor local state
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# SwiftPM / Xcode build outputs
+.build/
+.swiftpm/
+DerivedData/
+build/
+*.xcresult
+*.dSYM
+*.xcarchive
+
+# Generated app and release artifacts
+dist/
+artifacts/
+outputs/
+*.app/
+*.dmg
+*.zip
+*.pkg
+*.tar.gz
+
+# Local runtime logs and diagnostics
+logs/
+*.log
+*.trace
+
+# Local env, secrets, signing, and notarization material
+.env
+.env.*
+*.env
+*.secret
+*.secrets
+secrets/
+private/
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+*.key
+*.pem
+*.crt
+notarytool.json
+notarytool-profile.json
+
+# Local assistant scratch state
+.codex/
+.superpowers/

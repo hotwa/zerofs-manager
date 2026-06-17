@@ -1,0 +1,892 @@
+import Foundation
+import ZeroFSManagerDomain
+import ZeroFSManagerSecrets
+import ZeroFSManagerHelperClient
+import ZeroFSLaunchd
+import ZeroFSPerformance
+import ZeroFSPackagingSupport
+import ZeroFSPrivilegedHelperCore
+
+@main
+struct ZeroFSManagerChecks {
+    static func main() async throws {
+        var checks = CheckSuite()
+        try checkDomain(&checks)
+        try checkSecrets(&checks)
+        try checkZeroFSDependency(&checks)
+        try checkProfilePersistence(&checks)
+        try await checkHelperClient(&checks)
+        try checkLaunchd(&checks)
+        try checkHelperRuntime(&checks)
+        try await checkHelperOperations(&checks)
+        try await checkLoginAutoMount(&checks)
+        try await checkPerformance(&checks)
+        try checkPackaging(&checks)
+        checks.finish()
+    }
+
+    private static func checkDomain(_ checks: inout CheckSuite) throws {
+        let profile = try MountProfile.example()
+        checks.expect(ProfileValidator.validate(profile).isEmpty, "valid profile has no validation issues")
+
+        let defaultPath = MountPath.defaultPath(displayName: "Lingyu Zeng")
+        checks.expect(defaultPath.rawValue == "/Volumes/ZeroFS-Lingyu-Zeng", "default mount path uses display name")
+
+        var relative = try MountProfile.example()
+        relative.mountPath = MountPath(rawValue: "relative/path")
+        checks.expect(ProfileValidator.validate(relative).contains(.invalidMountPath), "relative mount path is rejected")
+
+        var traversal = try MountProfile.example()
+        traversal.mountPath = MountPath(rawValue: "/Volumes/../etc")
+        checks.expect(ProfileValidator.validate(traversal).contains(.unsafeMountPath), "path traversal is rejected")
+
+        var invalidObjectStorage = try MountProfile.example()
+        invalidObjectStorage.endpoint = "not a url"
+        invalidObjectStorage.bucket = "Bad Bucket"
+        invalidObjectStorage.prefix = "../escape"
+        let storageIssues = ProfileValidator.validate(invalidObjectStorage)
+        checks.expect(storageIssues.contains(.invalidEndpoint), "invalid endpoint is rejected")
+        checks.expect(storageIssues.contains(.invalidBucket), "invalid bucket is rejected")
+        checks.expect(storageIssues.contains(.invalidPrefix), "invalid prefix is rejected")
+
+        var injectedPrefix = try MountProfile.example()
+        injectedPrefix.prefix = "safe\"\n[aws]\nendpoint = \"evil"
+        checks.expect(ProfileValidator.validate(injectedPrefix).contains(.invalidPrefix), "prefix TOML injection characters are rejected")
+
+        var endpointWithPath = try MountProfile.example()
+        endpointWithPath.endpoint = "https://amiaps3.hzau.edu.cn/with/path"
+        checks.expect(ProfileValidator.validate(endpointWithPath).contains(.invalidEndpoint), "endpoint path is rejected")
+
+        var invalidID = try MountProfile.example()
+        invalidID.id = ProfileID(rawValue: "../root")
+        checks.expect(ProfileValidator.validate(invalidID).contains(.invalidProfileID), "raw decoded invalid profile id is rejected")
+
+        var duplicatePorts = try MountProfile.example()
+        duplicatePorts.ports = PortSet(nfs: 2049, rpc: 2049, metrics: 9091)
+        checks.expect(ProfileValidator.validate(duplicatePorts).contains(.duplicatePorts), "duplicate ports are rejected")
+
+        let id = try ProfileID("lingyuzeng")
+        let firstName = try MountProfile.example(id: id, displayName: "Lingyuzeng")
+        let renamed = try MountProfile.example(id: id, displayName: "Renamed")
+        checks.expect(
+            ProfileRuntimePaths(profile: firstName).configPath == ProfileRuntimePaths(profile: renamed).configPath,
+            "runtime paths remain stable after display rename"
+        )
+        checks.expect(
+            ServiceNames(profile: firstName).profileRuntimeLabel == ServiceNames(profile: renamed).profileRuntimeLabel,
+            "service labels remain stable after display rename"
+        )
+
+        let other = try MountProfile.example(id: ProfileID("lab-minio"))
+        checks.expect(
+            ProfileRuntimePaths(profile: firstName).configPath != ProfileRuntimePaths(profile: other).configPath,
+            "different profiles get different runtime paths"
+        )
+        checks.expect(
+            ServiceNames(profile: firstName).profileRuntimeLabel != ServiceNames(profile: other).profileRuntimeLabel,
+            "different profiles get different runtime service labels"
+        )
+        checks.expect(
+            ServiceNames(profile: firstName).helperMachServiceName == ServiceNames(profile: other).helperMachServiceName,
+            "different profiles share one stable helper mach service"
+        )
+        checks.expect(
+            PrivilegedMountPathPolicy().issues(for: MountPath(rawValue: "/Volumes/ZeroFS-lingyuzeng")).isEmpty,
+            "privileged mount policy allows child Volumes mount"
+        )
+        checks.expect(
+            PrivilegedMountPathPolicy().issues(for: MountPath(rawValue: "/Volumes")).contains(.unsafeMountPath),
+            "privileged mount policy rejects Volumes root"
+        )
+        checks.expect(
+            PrivilegedMountPathPolicy().issues(for: MountPath(rawValue: "/Library/ZeroFS")).contains(.unsafeMountPath),
+            "privileged mount policy rejects system directories"
+        )
+        let mountOutput = """
+        /dev/disk3s1 on / (apfs, local)
+        127.0.0.1:/ on /Volumes/ZeroFS-lingyuzeng (nfs, asynchronous)
+        """
+        checks.expect(
+            LocalMountTable.isMounted(path: "/Volumes/ZeroFS-lingyuzeng", mountOutput: mountOutput),
+            "local mount table detects an externally mounted ZeroFS path"
+        )
+        checks.expect(
+            !LocalMountTable.isMounted(path: "/Volumes/ZeroFS-missing", mountOutput: mountOutput),
+            "local mount table reports missing mount path"
+        )
+        let nonZeroFSMountOutput = """
+        /dev/disk9s1 on /Volumes/ZeroFS-lingyuzeng (apfs, local, read-only)
+        storage.example:/ on /Volumes/ZeroFS-remote (nfs, nodev, nosuid)
+        """
+        checks.expect(
+            !LocalMountTable.isMounted(path: "/Volumes/ZeroFS-lingyuzeng", mountOutput: nonZeroFSMountOutput),
+            "local mount table rejects ordinary mounts at the ZeroFS path"
+        )
+        checks.expect(
+            !LocalMountTable.isMounted(path: "/Volumes/ZeroFS-remote", mountOutput: nonZeroFSMountOutput),
+            "local mount table rejects remote NFS mounts that are not local ZeroFS"
+        )
+
+        checks.expect(!OneActiveProfilePolicy.canAdd(other, to: [firstName]), "v1 rejects additional active profile")
+        checks.expect(OneActiveProfilePolicy.canAdd(firstName, to: []), "v1 allows first active profile")
+        checks.expect(ProductDefaults.firstRunAutoMountPolicy == .disabled, "first-run profile does not auto-mount before explicit user opt-in")
+        checks.expect(ProductDefaults.defaultPerformanceTestMegabytes == 64, "default performance test size is conservative")
+        checks.expect(AppDistributionMode.defaultMode == .githubDev, "default app distribution mode is GitHub-style dev")
+        checks.expect(!AppDistributionMode.githubDev.allowsAutomaticHelperRegistration, "GitHub-style dev does not auto-register the privileged helper")
+        checks.expect(!AppDistributionMode.githubDev.allowsLoginAutoMount, "GitHub-style dev does not auto-mount at login")
+        checks.expect(!AppDistributionMode.githubDev.requiresAppleTeamIdentifier, "GitHub-style dev does not require an Apple TeamIdentifier")
+        checks.expect(AppDistributionMode.officialRelease.allowsAutomaticHelperRegistration, "official release enables helper registration path")
+        checks.expect(AppDistributionMode.officialRelease.requiresAppleTeamIdentifier, "official release requires an Apple TeamIdentifier")
+        checks.expect(
+            AppDistributionMode.resolve(environment: ["ZEROFS_MANAGER_DISTRIBUTION_MODE": "official-release"]) == .officialRelease,
+            "distribution mode can be selected for release builds"
+        )
+        var legacyAutoMount = try MountProfile.example()
+        legacyAutoMount.autoMount = .afterLogin
+        checks.expect(
+            FirstRunProfilePolicy.requireExplicitAutoMountOptIn([legacyAutoMount]).first?.autoMount == .disabled,
+            "legacy profiles require a fresh explicit auto-mount opt-in"
+        )
+    }
+
+    private static func checkSecrets(_ checks: inout CheckSuite) throws {
+        let profileID = try ProfileID("lingyuzeng")
+        let store = InMemorySecretStore()
+        try store.save("access-value", kind: .s3AccessKeyID, profileID: profileID)
+        try store.save("secret-value", kind: .s3SecretAccessKey, profileID: profileID)
+
+        checks.expect(try store.read(kind: .s3AccessKeyID, profileID: profileID) == "access-value", "in-memory store reads access key")
+        checks.expect(try store.read(kind: .s3SecretAccessKey, profileID: profileID) == "secret-value", "in-memory store reads secret key")
+
+        let redacted = SecretRedactor.redact(
+            "endpoint ok access-value secret-value",
+            secrets: ["access-value", "secret-value"]
+        )
+        checks.expect(!redacted.contains("access-value"), "redactor removes access key")
+        checks.expect(!redacted.contains("secret-value"), "redactor removes secret key")
+        checks.expect(redacted.contains("[REDACTED]"), "redactor marks redacted values")
+
+        let profile = try MountProfile.example()
+        let encodedProfile = String(decoding: try JSONEncoder().encode(profile), as: UTF8.self)
+        checks.expect(!encodedProfile.contains("access-value"), "profile JSON does not contain access key")
+        checks.expect(!encodedProfile.contains("secret-value"), "profile JSON does not contain secret key")
+
+        let reportText = String(describing: PerformanceReport(
+            profileID: profileID,
+            sizeBytes: 4096,
+            checksumStatus: .pass,
+            writeSeconds: 0.1,
+            readSeconds: 0.1,
+            dfBeforeWrite: DiskUsageSnapshot(phase: .beforeWrite, path: "/Volumes/ZeroFS-lingyuzeng", rawOutput: "df output"),
+            dfAfterWrite: DiskUsageSnapshot(phase: .afterWrite, path: "/Volumes/ZeroFS-lingyuzeng", rawOutput: "df output"),
+            dfAfterCleanup: DiskUsageSnapshot(phase: .afterCleanup, path: "/Volumes/ZeroFS-lingyuzeng", rawOutput: "df output"),
+            metricsBeforeCleanup: "zerofs_used_bytes 0",
+            metricsAfterCleanup: "zerofs_used_bytes 0",
+            remoteCleanup: .removed,
+            readbackCleanup: .removed,
+            capacityNote: "configured ZeroFS quota"
+        ))
+        checks.expect(!reportText.contains("access-value"), "performance report text does not contain access key")
+        checks.expect(!reportText.contains("secret-value"), "performance report text does not contain secret key")
+
+        let redactedError = SecretRedactor.redact(
+            HelperClientError.operationFailed(operation: .mount, message: "failed secret-value", logExcerpt: "access-value").description,
+            secrets: ["access-value", "secret-value"]
+        )
+        checks.expect(!redactedError.contains("access-value"), "printable error redaction removes access key")
+        checks.expect(!redactedError.contains("secret-value"), "printable error redaction removes secret key")
+    }
+
+    private static func checkZeroFSDependency(_ checks: inout CheckSuite) throws {
+        checks.expect(
+            ZeroFSInstallGuidance.recommendedShellCommand == "curl -sSfL https://sh.zerofs.net | sh",
+            "ZeroFS install guidance uses official install script"
+        )
+        checks.expect(
+            ZeroFSInstallGuidance.sourceURL.absoluteString == "https://github.com/Barre/zerofs",
+            "ZeroFS install guidance links to upstream project"
+        )
+
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        let binDirectory = tempRoot.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        let fakeBinary = binDirectory.appendingPathComponent("zerofs")
+        try "#!/bin/sh\nprintf 'zerofs 1.2.6\\n'\n".write(to: fakeBinary, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeBinary.path)
+
+        let locator = ZeroFSBinaryLocator(pathEnvironment: binDirectory.path, additionalCandidatePaths: [])
+        let detected = locator.locate()
+        checks.expect(detected?.path == fakeBinary.path, "ZeroFS locator finds executable on PATH")
+        checks.expect(detected?.version == "zerofs 1.2.6", "ZeroFS locator records version output")
+
+        let slowBinary = binDirectory.appendingPathComponent("slow-zerofs")
+        try "#!/bin/sh\nsleep 1\nprintf 'zerofs slow\\n'\n".write(to: slowBinary, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: slowBinary.path)
+        let slowLocator = ZeroFSBinaryLocator(pathEnvironment: "", additionalCandidatePaths: [slowBinary.path], versionTimeoutSeconds: 0.05)
+        checks.expect(slowLocator.locate()?.version == nil, "ZeroFS version detection times out instead of blocking startup")
+
+        let missingLocator = ZeroFSBinaryLocator(pathEnvironment: tempRoot.appendingPathComponent("missing").path, additionalCandidatePaths: [])
+        checks.expect(missingLocator.locate() == nil, "ZeroFS locator reports missing dependency")
+    }
+
+    private static func checkProfilePersistence(_ checks: inout CheckSuite) throws {
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        let store = FileMountProfileStore(fileURL: tempRoot.appendingPathComponent("profiles.json"))
+        let profile = try MountProfile.example()
+        try store.save([profile])
+
+        checks.expect(try store.load() == [profile], "profile store persists non-secret mount metadata")
+        let storedText = try String(contentsOf: store.fileURL, encoding: .utf8)
+        checks.expect(!storedText.contains("access-value"), "profile store does not persist access key fixtures")
+        checks.expect(!storedText.contains("secret-value"), "profile store does not persist secret key fixtures")
+    }
+
+    private static func checkHelperClient(_ checks: inout CheckSuite) async throws {
+        let profile = try MountProfile.example()
+        let client = MockPrivilegedHelperClient()
+        client.statusResult = .init(
+            registration: .enabled,
+            service: .running,
+            mount: .unmounted,
+            metricsReachable: true,
+            lastError: nil
+        )
+
+        let status = try await client.status(profileID: profile.id)
+        checks.expect(status.registration == .enabled, "mock helper reports registration state")
+        checks.expect(status.service == .running, "mock helper reports service state")
+        checks.expect(status.mount == .unmounted, "mock helper reports mount state")
+
+        let request = HelperRequest.mount(profile)
+        let requestRoundTrip = try JSONDecoder().decode(
+            HelperRequest.self,
+            from: try JSONEncoder().encode(request)
+        )
+        checks.expect(requestRoundTrip == request, "helper request model codable round-trips")
+
+        let response = HelperResponse.status(status)
+        let responseRoundTrip = try JSONDecoder().decode(
+            HelperResponse.self,
+            from: try JSONEncoder().encode(response)
+        )
+        checks.expect(responseRoundTrip == response, "helper response model codable round-trips")
+
+        checks.expect(
+            ServiceManagementStatusMapper.map(.requiresApproval) == .requiresApproval,
+            "ServiceManagement requires-approval maps to helper registration state"
+        )
+        checks.expect(
+            XPCPrivilegedHelperClient.machServiceName == "com.zerofs.manager.helper",
+            "XPC helper client uses bundled helper Mach service"
+        )
+        checks.expect(
+            HelperServiceRegistrar.helperPlistName == "com.zerofs.manager.helper.plist",
+            "ServiceManagement registrar uses bundled helper plist"
+        )
+        let helperMain = try String(
+            contentsOf: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("Sources/ZeroFSPrivilegedHelper/main.swift"),
+            encoding: .utf8
+        )
+        checks.expect(
+            helperMain.contains("ZEROFS_MANAGER_HELPER_MACH_SERVICE_NAME"),
+            "privileged helper can use a debug Mach service name for manual launchd testing"
+        )
+        let authPolicy = HelperClientAuthorizationPolicy(
+            allowedBundleIdentifier: "com.zerofs.manager",
+            allowedTeamIdentifier: "TEAM12345"
+        )
+        checks.expect(
+            authPolicy.accepts(ClientCodeSigningInfo(bundleIdentifier: "com.zerofs.manager", teamIdentifier: "TEAM12345")),
+            "helper client authorization accepts matching signed app"
+        )
+        checks.expect(
+            !authPolicy.accepts(ClientCodeSigningInfo(bundleIdentifier: "com.evil.manager", teamIdentifier: "TEAM12345")),
+            "helper client authorization rejects wrong bundle id"
+        )
+        checks.expect(
+            !authPolicy.accepts(ClientCodeSigningInfo(bundleIdentifier: "com.zerofs.manager", teamIdentifier: "OTHERTEAM")),
+            "helper client authorization rejects wrong team id"
+        )
+        let encodedRequest = try HelperXPCMessageCodec.encodeRequest(.status(profile.id))
+        checks.expect(
+            try HelperXPCMessageCodec.decodeRequest(encodedRequest) == .status(profile.id),
+            "XPC helper request codec round-trips"
+        )
+        let encodedResponse = try HelperXPCMessageCodec.encodeResponse(.accepted(.mount))
+        checks.expect(
+            try HelperXPCMessageCodec.decodeResponse(encodedResponse) == .accepted(.mount),
+            "XPC helper response codec round-trips"
+        )
+
+        client.statusResult = .init(
+            registration: .requiresApproval,
+            service: .stopped,
+            mount: .stale,
+            metricsReachable: false,
+            lastError: "approval required"
+        )
+        let approvalStatus = try await client.status(profileID: profile.id)
+        checks.expect(approvalStatus.registration == .requiresApproval, "mock helper reports requires-approval state")
+        checks.expect(approvalStatus.mount == .stale, "mock helper reports stale mount state")
+
+        client.statusResult = .init(
+            registration: .disabled,
+            service: .failed,
+            mount: .failed,
+            metricsReachable: false,
+            lastError: "disabled in System Settings"
+        )
+        let disabledStatus = try await client.status(profileID: profile.id)
+        checks.expect(disabledStatus.registration == .disabled, "mock helper reports disabled state")
+        checks.expect(disabledStatus.service == .failed, "mock helper reports failed service state")
+
+        client.mountResult = .failure(.operationFailed(operation: .mount, message: "NFS failed", logExcerpt: "mount timeout"))
+        do {
+            try await client.mount(profile)
+            checks.expect(false, "mock helper mount failure throws")
+        } catch let error as HelperClientError {
+            checks.expect(error.description.contains("NFS failed"), "helper error includes human message")
+            checks.expect(error.description.contains("mount timeout"), "helper error includes bounded log excerpt")
+        }
+
+        client.mountResult = .failure(.requiresApproval)
+        do {
+            try await client.mount(profile)
+            checks.expect(false, "mock helper approval failure throws")
+        } catch HelperClientError.requiresApproval {
+            checks.expect(true, "helper approval failure is typed")
+        }
+
+        client.statusResultOverride = .failure(.unavailable)
+        do {
+            _ = try await client.status(profileID: profile.id)
+            checks.expect(false, "mock helper unavailable status throws")
+        } catch HelperClientError.unavailable {
+            checks.expect(true, "helper unavailable failure is typed")
+        }
+    }
+
+    private static func checkLaunchd(_ checks: inout CheckSuite) throws {
+        let profile = try MountProfile.example()
+        let names = ServiceNames(profile: profile)
+        let plist = LaunchDaemonPlist(
+            label: names.helperLaunchDaemonLabel,
+            bundleProgram: "Contents/MacOS/ZeroFSPrivilegedHelper",
+            machServiceName: names.helperMachServiceName,
+            associatedBundleIdentifier: "com.zerofs.manager",
+            runAtLoad: true,
+            keepAlive: false
+        )
+        let data = try plist.xmlData()
+        let text = String(decoding: data, as: UTF8.self)
+
+        checks.expect(names.helperLaunchDaemonPlistName == "com.zerofs.manager.helper.plist", "helper launchd plist name is stable")
+        checks.expect(names.profileRuntimePlistName.hasSuffix(".plist"), "profile runtime plist name has suffix")
+        checks.expect(text.contains("BundleProgram"), "launchd plist contains BundleProgram")
+        checks.expect(text.contains("MachServices"), "launchd plist contains MachServices")
+        checks.expect(text.contains("AssociatedBundleIdentifiers"), "launchd plist contains AssociatedBundleIdentifiers")
+        checks.expect(!text.contains("secret-value"), "launchd plist contains no secrets from check fixture")
+    }
+
+    private static func checkHelperRuntime(_ checks: inout CheckSuite) throws {
+        let profile = try MountProfile.example()
+        let fileSet = try HelperRuntimeGenerator.makeFileSet(profile: profile)
+        checks.expect(fileSet.configContents.contains("amiaps3.hzau.edu.cn"), "helper runtime config contains endpoint")
+        checks.expect(!fileSet.configContents.contains("secret-value"), "helper runtime config contains no secret")
+
+        var unsafeProfile = profile
+        unsafeProfile.mountPath = MountPath(rawValue: "/Library/ZeroFS")
+        do {
+            _ = try HelperRuntimeGenerator.makeFileSet(profile: unsafeProfile)
+            checks.expect(false, "helper runtime rejects unsafe mount path")
+        } catch HelperRuntimeValidationError.invalidPrivilegedMountPath {
+            checks.expect(true, "helper runtime rejects unsafe mount path")
+        }
+
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        let runtimeProfile = try MountProfile.example(id: ProfileID("runtime-test"))
+        let runtimePaths = ProfileRuntimePaths(profile: runtimeProfile, baseRoot: tempRoot.appendingPathComponent("runtime").path)
+        do {
+            _ = try HelperRuntimeGenerator.makeFileSet(profile: runtimeProfile, paths: runtimePaths)
+            checks.expect(false, "helper runtime rejects unapproved runtime root")
+        } catch HelperRuntimeValidationError.invalidRuntimeRoot {
+            checks.expect(true, "helper runtime rejects unapproved runtime root")
+        }
+        let approvedRuntimeSet = try HelperRuntimeGenerator.makeFileSet(
+            profile: runtimeProfile,
+            paths: runtimePaths,
+            allowedRuntimeRoots: [tempRoot.appendingPathComponent("runtime").path]
+        )
+        checks.expect(approvedRuntimeSet.paths.runtimeRoot == runtimePaths.runtimeRoot, "helper runtime accepts explicit approved runtime root")
+
+        let runtimeSet = HelperRuntimeFileSet(profile: runtimeProfile, paths: runtimePaths)
+        let escapedProfile = MountProfile(
+            id: try ProfileID("escape-test"),
+            displayName: "escape",
+            endpoint: "https://example.com",
+            bucket: "example-bucket",
+            prefix: "",
+            mountPath: MountPath(rawValue: "/Volumes/ZeroFS-escape"),
+            quota: Quota(gigabytes: 1),
+            cache: CacheSettings(diskGigabytes: 0, memoryGigabytes: 0),
+            ports: PortSet(nfs: 2049, rpc: 17000, metrics: 9091),
+            autoMount: .disabled,
+            performanceTestSize: .megabytes(1)
+        )
+        let escapedPaths = ProfileRuntimePaths(profile: escapedProfile, baseRoot: tempRoot.appendingPathComponent("runtime").path)
+        let escapedFileSet = HelperRuntimeFileSet(profile: escapedProfile, paths: escapedPaths)
+        checks.expect(escapedFileSet.configContents.contains("endpoint = \"https://example.com\""), "helper runtime TOML quotes endpoint")
+
+        try HelperRuntimeWriter().write(
+            fileSet: runtimeSet,
+            envContents: runtimeSet.envContents(
+                accessKeyVariable: "access-value",
+                secretKeyVariable: "secret-value",
+                encryptionPasswordVariable: "password-value"
+            )
+        )
+        let envAttributes = try FileManager.default.attributesOfItem(atPath: runtimePaths.envPath)
+        checks.expect((envAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o600, "helper runtime env file uses 0600 permissions")
+
+        checks.expect(fileSet.configContents.contains("[storage]"), "helper runtime config uses ZeroFS storage section")
+        checks.expect(fileSet.configContents.contains("s3://user-123456789/lingyuzeng"), "helper runtime config uses bucket and prefix URL")
+        checks.expect(fileSet.configContents.contains("[aws]"), "helper runtime config uses ZeroFS aws section")
+        checks.expect(fileSet.configContents.contains("127.0.0.1:2049"), "helper runtime config binds NFS to loopback port")
+        checks.expect(
+            runtimeSet.envContents(
+                accessKeyVariable: "access-value",
+                secretKeyVariable: "secret-value",
+                encryptionPasswordVariable: "password-value"
+            ).contains("ZEROFS_CACHE_DIR='\(runtimePaths.cachePath)'"),
+            "helper runtime env exports cache directory"
+        )
+
+        let external = ExternalZeroFSRuntimeDependency(binary: ZeroFSBinary(path: "/usr/local/bin/zerofs"))
+        checks.expect(
+            external.runArguments(configPath: runtimePaths.configPath) == ["/usr/local/bin/zerofs", "run", "--config", runtimePaths.configPath],
+            "helper runtime uses external zerofs binary"
+        )
+        checks.expect(
+            external.flushArguments(configPath: runtimePaths.configPath) == ["/usr/local/bin/zerofs", "flush", "--config", runtimePaths.configPath],
+            "helper runtime flush uses external zerofs binary"
+        )
+
+        let mountCommand = ExternalZeroFSCommandFactory.mountCommand(profile: profile)
+        checks.expect(
+            mountCommand == HelperCommand(
+                executablePath: "/sbin/mount",
+                arguments: [
+                    "-t",
+                    "nfs",
+                    "-o",
+                    "async,nolocks,vers=3,tcp,port=2049,mountport=2049,hard,rsize=1048576,wsize=1048576",
+                    "127.0.0.1:/",
+                    "/Volumes/ZeroFS-lingyuzeng"
+                ]
+            ),
+            "helper runtime builds proven NFSv3 mount command"
+        )
+        checks.expect(
+            ExternalZeroFSCommandFactory.unmountCommand(profile: profile) == HelperCommand(
+                executablePath: "/sbin/umount",
+                arguments: ["/Volumes/ZeroFS-lingyuzeng"]
+            ),
+            "helper runtime builds unmount command"
+        )
+        checks.expect(
+            fileSet.runScriptContents(binary: ZeroFSBinary(path: "/usr/local/bin/zerofs")).contains("run --config"),
+            "helper runtime run script invokes zerofs run with config"
+        )
+        checks.expect(
+            fileSet.mountScriptContents.contains("NFS_OPTIONS=\"async,nolocks,vers=3,tcp,port=2049,mountport=2049,hard,rsize=1048576,wsize=1048576\""),
+            "helper runtime mount script uses proven NFS options"
+        )
+    }
+
+    private static func checkHelperOperations(_ checks: inout CheckSuite) async throws {
+        let profile = try MountProfile.example()
+        let recorder = RecordingHelperOperationEnvironment()
+        let coordinator = HelperOperationCoordinator(environment: recorder)
+
+        _ = await coordinator.handle(.installOrUpdate(profile))
+        _ = await coordinator.handle(.syncRuntimeSecrets(
+            profileID: profile.id,
+            secrets: RuntimeSecretPayload(
+                accessKeyID: "access-value",
+                secretAccessKey: "secret-value",
+                zeroFSEncryptionPassword: "password-value"
+            )
+        ))
+        _ = await coordinator.handle(.start(profile.id))
+        _ = await coordinator.handle(.stop(profile.id))
+        _ = await coordinator.handle(.restart(profile.id))
+        _ = await coordinator.handle(.mount(profile))
+        _ = await coordinator.handle(.unmount(profile.id))
+        _ = await coordinator.handle(.flush(profile.id))
+        let statusResponse = await coordinator.handle(.status(profile.id))
+        let logsResponse = await coordinator.handle(.logs(profileID: profile.id, limitBytes: 8))
+
+        checks.expect(
+            recorder.operations == [.installOrUpdate, .syncRuntimeSecrets, .start, .stop, .restart, .mount, .unmount, .flush, .status, .logs],
+            "helper operation coordinator executes only supported operations"
+        )
+        checks.expect(statusResponse == .status(recorder.status), "helper operation coordinator returns typed status")
+        checks.expect(logsResponse == .logs("bounded "), "helper operation coordinator returns bounded logs")
+
+        let failing = RecordingHelperOperationEnvironment()
+        failing.mountResult = .failure(HelperClientError.operationFailed(operation: .mount, message: "mount failed", logExcerpt: "nfs refused"))
+        let failingCoordinator = HelperOperationCoordinator(environment: failing)
+        let failure = await failingCoordinator.handle(.mount(profile))
+        checks.expect(
+            failure == .failure(HelperErrorPayload(operation: .mount, message: "mount failed", logExcerpt: "nfs refused")),
+            "helper operation coordinator returns structured failure"
+        )
+
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        let binDirectory = tempRoot.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        let fakeBinary = binDirectory.appendingPathComponent("zerofs")
+        try "#!/bin/sh\nprintf 'zerofs 1.2.6\\n'\n".write(to: fakeBinary, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeBinary.path)
+        let commandRunner = RecordingHelperCommandRunner()
+        let runtimeBaseRoot = tempRoot.appendingPathComponent("runtime").path
+        let externalEnvironment = ExternalZeroFSOperationEnvironment(
+            binaryLocator: ZeroFSBinaryLocator(pathEnvironment: binDirectory.path, additionalCandidatePaths: []),
+            commandRunner: commandRunner,
+            profileStore: InMemoryHelperProfileStore(),
+            runtimeBaseRoot: runtimeBaseRoot,
+            launchDaemonRoot: tempRoot.appendingPathComponent("launchdaemons").path,
+            logRoot: tempRoot.appendingPathComponent("logs").path,
+            mountTableReader: StaticMountTableReader(mountedPaths: []),
+            portWaiter: ImmediatePortWaiter(),
+            createMountDirectory: false
+        )
+        try await externalEnvironment.installOrUpdate(profile)
+        try await externalEnvironment.syncRuntimeSecrets(
+            profileID: profile.id,
+            secrets: RuntimeSecretPayload(
+                accessKeyID: "access-value",
+                secretAccessKey: "secret-value",
+                zeroFSEncryptionPassword: "password-value"
+            )
+        )
+        try await externalEnvironment.start(profileID: profile.id)
+        try await externalEnvironment.mount(profile)
+        try await externalEnvironment.flush(profileID: profile.id)
+        try await externalEnvironment.unmount(profileID: profile.id)
+        commandRunner.queuedResults = [HelperCommandResult(exitCode: 0, standardOutput: "state = running\npid = 123\n")]
+        let externalStatus = try await externalEnvironment.status(profileID: profile.id)
+        let externalLogs = try await externalEnvironment.logs(profileID: profile.id, limitBytes: 16)
+        checks.expect(commandRunner.commands.contains(ExternalZeroFSCommandFactory.mountCommand(profile: profile)), "external helper environment executes NFS mount command")
+        checks.expect(
+            commandRunner.commands.contains(ExternalZeroFSCommandFactory.flushCommand(
+                binary: ZeroFSBinary(path: fakeBinary.path),
+                configPath: ProfileRuntimePaths(profile: profile, baseRoot: runtimeBaseRoot).configPath
+            )),
+            "external helper environment executes zerofs flush"
+        )
+        checks.expect(externalStatus.registration == .enabled, "external helper environment reports helper enabled")
+        checks.expect(externalStatus.service == .running, "external helper environment reports running service from launchctl")
+        checks.expect(externalStatus.mount == .unmounted, "external helper environment reports unmounted path from mount table")
+        checks.expect(externalStatus.metricsReachable, "external helper environment reports metrics reachability")
+        checks.expect(externalLogs.count <= 16, "external helper environment returns bounded logs")
+    }
+
+    private static func checkLoginAutoMount(_ checks: inout CheckSuite) async throws {
+        var disabled = try MountProfile.example()
+        disabled.autoMount = .disabled
+        let disabledClient = MockPrivilegedHelperClient()
+        let disabledReport = await LoginAutoMountCoordinator(helper: disabledClient).run(activeProfile: disabled)
+        checks.expect(disabledReport.outcome == .skippedDisabled, "auto-mount skips disabled profile")
+        checks.expect(disabledClient.recordedOperations.isEmpty, "auto-mount disabled does not contact helper")
+
+        let unmountedClient = MockPrivilegedHelperClient()
+        unmountedClient.statusResult = HelperStatus(
+            registration: .enabled,
+            service: .running,
+            mount: .unmounted,
+            metricsReachable: true,
+            lastError: nil
+        )
+        let mountedReport = await LoginAutoMountCoordinator(helper: unmountedClient).run(activeProfile: try MountProfile.example())
+        checks.expect(mountedReport.outcome == .mounted, "auto-mount mounts service running but unmounted profile")
+        checks.expect(unmountedClient.recordedOperations == [.status, .mount], "auto-mount checks status before mount")
+
+        let stoppedClient = MockPrivilegedHelperClient()
+        stoppedClient.statusResult = HelperStatus(
+            registration: .enabled,
+            service: .stopped,
+            mount: .unmounted,
+            metricsReachable: false,
+            lastError: nil
+        )
+        let startedReport = await LoginAutoMountCoordinator(helper: stoppedClient).run(activeProfile: try MountProfile.example())
+        checks.expect(startedReport.outcome == .mounted, "auto-mount starts stopped service before mounting")
+        checks.expect(stoppedClient.recordedOperations == [.status, .start, .mount], "auto-mount starts then mounts")
+
+        let unavailableClient = MockPrivilegedHelperClient()
+        unavailableClient.statusResultOverride = .failure(.unavailable)
+        let unavailableReport = await LoginAutoMountCoordinator(helper: unavailableClient).run(activeProfile: try MountProfile.example())
+        checks.expect(unavailableReport.outcome.isFailure, "auto-mount reports helper unavailable failure")
+        checks.expect(unavailableReport.failure?.operation == .status, "auto-mount helper unavailable failure names status operation")
+
+        let failingMountClient = MockPrivilegedHelperClient()
+        failingMountClient.statusResult = HelperStatus(
+            registration: .enabled,
+            service: .running,
+            mount: .unmounted,
+            metricsReachable: false,
+            lastError: nil
+        )
+        failingMountClient.mountResult = .failure(.operationFailed(operation: .mount, message: "NFS mount failed", logExcerpt: "mount_nfs timeout"))
+        failingMountClient.logsResult = "mount_nfs timeout\nfull log"
+        let failingReport = await LoginAutoMountCoordinator(helper: failingMountClient).run(activeProfile: try MountProfile.example())
+        checks.expect(failingReport.outcome.isFailure, "auto-mount reports mount failure")
+        checks.expect(failingReport.failure?.message.contains("NFS mount failed") == true, "auto-mount failure keeps human-readable message")
+        checks.expect(failingReport.failure?.logExcerpt?.contains("mount_nfs timeout") == true, "auto-mount failure includes bounded log excerpt")
+    }
+
+    private static func checkPerformance(_ checks: inout CheckSuite) async throws {
+        let missingMountRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let missingWork = missingMountRoot.appendingPathComponent("work")
+        try FileManager.default.createDirectory(at: missingWork, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: missingMountRoot) }
+        let missingMountRunner = PerformanceTestRunner(
+            fileManager: .default,
+            helper: MockPerformanceHelper(),
+            metrics: StaticMetricsProvider(metrics: ""),
+            diskUsage: StaticDiskUsageProvider(),
+            byteGenerator: RepeatingByteGenerator(byte: 0x2A),
+            settleAfterCleanupNanoseconds: 0
+        )
+        do {
+            _ = try await missingMountRunner.run(
+                profileID: try ProfileID("lingyuzeng"),
+                mountDirectory: missingMountRoot.appendingPathComponent("not-mounted"),
+                workDirectory: missingWork,
+                sizeBytes: 4096
+            )
+            checks.expect(false, "performance runner rejects missing mount directory")
+        } catch PerformanceTestError.mountNotAvailable {
+            checks.expect(true, "performance runner rejects missing mount directory")
+        }
+
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let mount = tempRoot.appendingPathComponent("mount")
+        let work = tempRoot.appendingPathComponent("work")
+        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let runner = PerformanceTestRunner(
+            fileManager: .default,
+            helper: MockPerformanceHelper(),
+            metrics: StaticMetricsProvider(metrics: "zerofs_used_bytes 0\n"),
+            diskUsage: StaticDiskUsageProvider(),
+            byteGenerator: RepeatingByteGenerator(byte: 0x2A),
+            settleAfterCleanupNanoseconds: 0
+        )
+        let report = try await runner.run(
+            profileID: try ProfileID("lingyuzeng"),
+            mountDirectory: mount,
+            workDirectory: work,
+            sizeBytes: 4096
+        )
+
+        checks.expect(report.checksumStatus == .pass, "performance checksum passes")
+        checks.expect(report.remoteCleanup == .removed, "performance remote temp file is removed")
+        checks.expect(report.readbackCleanup == .removed, "performance readback temp file is removed")
+        checks.expect(report.dfBeforeWrite.phase == .beforeWrite, "performance captures df before write")
+        checks.expect(report.dfAfterWrite.phase == .afterWrite, "performance captures df after write")
+        checks.expect(report.dfAfterCleanup.phase == .afterCleanup, "performance captures df after cleanup")
+        checks.expect(report.metricsAfterCleanup.contains("zerofs_used_bytes"), "performance captures metrics after cleanup")
+        checks.expect(report.capacityNote.contains("configured ZeroFS quota"), "performance report explains quota semantics")
+
+        let failureRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let failureMount = failureRoot.appendingPathComponent("mount")
+        let failureWork = failureRoot.appendingPathComponent("work")
+        try FileManager.default.createDirectory(at: failureMount, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: failureWork, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: failureRoot) }
+
+        let failingRunner = PerformanceTestRunner(
+            fileManager: .default,
+            helper: MockPerformanceHelper(flushResult: .failure(HelperClientError.operationFailed(operation: .flush, message: "flush failed", logExcerpt: nil))),
+            metrics: StaticMetricsProvider(metrics: ""),
+            diskUsage: StaticDiskUsageProvider(),
+            byteGenerator: RepeatingByteGenerator(byte: 0x2A),
+            settleAfterCleanupNanoseconds: 0
+        )
+        do {
+            _ = try await failingRunner.run(
+                profileID: try ProfileID("lingyuzeng"),
+                mountDirectory: failureMount,
+                workDirectory: failureWork,
+                sizeBytes: 4096
+            )
+            checks.expect(false, "performance flush failure throws")
+        } catch {
+            let leftovers = try FileManager.default.contentsOfDirectory(atPath: failureMount.path)
+            checks.expect(leftovers.isEmpty, "performance cleanup runs after flush failure")
+        }
+    }
+
+    private static func checkPackaging(_ checks: inout CheckSuite) throws {
+        let layout = AppBundleLayout()
+        checks.expect(layout.appBundleName == "ZeroFS Manager.app", "packaging layout uses app bundle name")
+        checks.expect(layout.executablePath == "Contents/MacOS/ZeroFSManagerApp", "packaging layout points to app executable")
+        checks.expect(layout.helperExecutablePath == "Contents/MacOS/ZeroFSPrivilegedHelper", "packaging layout points to helper executable")
+        checks.expect(!layout.embedsZeroFSBinary, "packaging layout does not embed zerofs binary")
+        checks.expect(layout.externalDependencyName == "zerofs", "packaging layout declares external zerofs dependency")
+        checks.expect(layout.launchDaemonPlistPath == "Contents/Library/LaunchDaemons/com.zerofs.manager.helper.plist", "packaging layout includes launch daemon plist")
+        checks.expect(!DistributionMode.githubDev.requiresNotarization, "GitHub-style dev distribution does not require notarization")
+        checks.expect(DistributionMode.officialRelease.requiresNotarization, "official release distribution requires notarization")
+
+        let projectRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appInfoPlistURL = projectRoot.appendingPathComponent("Resources/App/Info.plist")
+        let appInfoPlistData = try Data(contentsOf: appInfoPlistURL)
+        let appInfoPlist = try PropertyListSerialization.propertyList(from: appInfoPlistData, format: nil) as? [String: Any]
+        checks.expect(appInfoPlist?["CFBundleIconFile"] as? String == "ZeroFSManager", "app Info.plist declares ZeroFSManager icon")
+        checks.expect(
+            FileManager.default.fileExists(atPath: projectRoot.appendingPathComponent("Resources/App/ZeroFSManager.icns").path),
+            "app icon resource exists"
+        )
+        checks.expect(
+            FileManager.default.fileExists(atPath: projectRoot.appendingPathComponent("Resources/DMG/background.png").path),
+            "DMG background resource exists"
+        )
+        let buildAppScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/build-app.sh"), encoding: .utf8)
+        checks.expect(buildAppScript.contains("codesign --force --deep --sign -"), "local app build ad-hoc signs the complete bundle")
+        checks.expect(buildAppScript.contains("Contents/Resources/Scripts"), "app bundle includes dev helper scripts as resources")
+        let rootViewSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSManagerUI/ZeroFSManagerRootView.swift"), encoding: .utf8)
+        checks.expect(rootViewSource.contains("--env /path/to/.env.local --delete-env-on-exit"), "copy CLI command uses a safe env template instead of writing secrets")
+        checks.expect(rootViewSource.contains("LocalPerformanceHelper"), "GitHub-style dev performance tests can run against an existing local mount without helper registration")
+        checks.expect(rootViewSource.contains("MountFailureRecovery.classify"), "mount failure dialogs classify recovery actions by failure type")
+        checks.expect(rootViewSource.contains("case .credentials"), "missing credential failures avoid helper approval guidance")
+        let verifyBundleScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/verify-bundle.sh"), encoding: .utf8)
+        checks.expect(verifyBundleScript.contains("codesign --verify --deep --strict"), "bundle verification enforces strict codesign")
+        let requiredDevScripts = [
+            "sign-app-adhoc.sh",
+            "inspect-signature.sh",
+            "package-github-dev.sh",
+            "manual-mount-test.sh",
+            "manual-install-launchdaemon-debug.sh",
+            "manual-uninstall-launchdaemon-debug.sh",
+            "sign-app-developer-id.sh",
+            "notarize-dmg.sh",
+            "verify-release.sh"
+        ]
+        for scriptName in requiredDevScripts {
+            let scriptURL = projectRoot.appendingPathComponent("Scripts/\(scriptName)")
+            checks.expect(FileManager.default.fileExists(atPath: scriptURL.path), "script exists: \(scriptName)")
+        }
+        let inspectSignatureScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/inspect-signature.sh"), encoding: .utf8)
+        checks.expect(inspectSignatureScript.contains("--help"), "signature inspector supports help without treating it as a path")
+        checks.expect(inspectSignatureScript.contains("TeamIdentifier=not set"), "signature inspector explains missing TeamIdentifier")
+        checks.expect(inspectSignatureScript.contains("spctl assessment failed as expected for github-dev"), "signature inspector treats spctl as nonblocking in github-dev")
+        let manualMountScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-mount-test.sh"), encoding: .utf8)
+        checks.expect(manualMountScript.contains("redact"), "manual mount script redacts secrets")
+        checks.expect(manualMountScript.contains("--delete-env-on-exit"), "manual mount script can delete temporary env files")
+        checks.expect(manualMountScript.contains("zerofs run --config"), "manual mount script starts zerofs directly")
+        checks.expect(manualMountScript.contains("shasum -a 256"), "manual mount script verifies readback checksum")
+        checks.expect(manualMountScript.contains("/sbin/umount"), "manual mount script unmounts after the smoke test")
+        let manualPerformanceScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-performance-test.sh"), encoding: .utf8)
+        checks.expect(manualPerformanceScript.contains("SIZE_BYTES_DEFAULT=$((128 * 1024 * 1024))"), "manual performance test defaults to 128M")
+        checks.expect(manualPerformanceScript.contains("--confirm-large-test"), "manual performance test requires confirmation for large runs")
+        checks.expect(manualPerformanceScript.contains("--allow-non-zerofs-mount"), "manual performance test protects against accidental non-ZeroFS mount points")
+        checks.expect(manualPerformanceScript.contains("Invalid --size"), "manual performance test reports invalid sizes cleanly")
+        checks.expect(manualPerformanceScript.contains("small files"), "manual performance test covers small file operations")
+        let githubDevPackageScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/package-github-dev.sh"), encoding: .utf8)
+        checks.expect(githubDevPackageScript.contains("--help"), "github-dev package script supports help without building")
+        checks.expect(githubDevPackageScript.contains("VERIFY_CODESIGN=0"), "github-dev unsigned package mode bypasses strict bundle codesign only when requested")
+        checks.expect(githubDevPackageScript.contains("GitHub-style development build"), "github-dev package README warns about dev distribution")
+        checks.expect(githubDevPackageScript.contains("ZeroFS-Manager-dev-adhoc.dmg"), "github-dev package emits dev adhoc DMG")
+        let debugInstallScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-install-launchdaemon-debug.sh"), encoding: .utf8)
+        checks.expect(debugInstallScript.contains("com.zerofs.manager.helper.debug"), "debug launchd install uses debug-only label")
+        checks.expect(debugInstallScript.contains("ZEROFS_MANAGER_HELPER_MACH_SERVICE_NAME"), "debug launchd install sets matching helper Mach service name")
+        checks.expect(debugInstallScript.contains("manual launchd debug path"), "debug launchd install explains it is not official SMAppService")
+
+        let profileTemplate = try String(
+            contentsOf: projectRoot.appendingPathComponent("Resources/LaunchDaemons/zerofs-profile.plist.template"),
+            encoding: .utf8
+        )
+        checks.expect(profileTemplate.contains("<string>{{ZEROFS_RUN_SCRIPT}}</string>"), "profile launchd template uses root-only run wrapper")
+        checks.expect(!profileTemplate.contains("{{ZEROFS_BINARY}}"), "profile launchd template does not bypass env wrapper")
+
+        let configTemplate = try String(
+            contentsOf: projectRoot.appendingPathComponent("Resources/Templates/zerofs.toml.template"),
+            encoding: .utf8
+        )
+        checks.expect(configTemplate.contains("[storage]"), "packaged ZeroFS config template uses storage section")
+        checks.expect(configTemplate.contains("url = \"{{S3_URL}}\""), "packaged ZeroFS config template uses precomputed S3 URL")
+        checks.expect(!configTemplate.contains("{{S3_BUCKET}}/{{S3_PREFIX}}"), "packaged ZeroFS config template does not force empty-prefix slash")
+        checks.expect(configTemplate.contains("[servers.nfs]"), "packaged ZeroFS config template uses servers.nfs section")
+        checks.expect(!configTemplate.contains("[s3]"), "packaged ZeroFS config template does not use obsolete s3 section")
+
+        let envTemplate = try String(
+            contentsOf: projectRoot.appendingPathComponent("Resources/Templates/zerofs.env.template"),
+            encoding: .utf8
+        )
+        checks.expect(envTemplate.contains("ZEROFS_PASSWORD="), "packaged env template uses ZeroFS password variable")
+        checks.expect(!envTemplate.contains("ZEROFS_ENCRYPTION_PASSWORD"), "packaged env template does not use obsolete password variable")
+    }
+}
+
+private extension LoginAutoMountOutcome {
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+}
+
+struct CheckSuite {
+    private var failures: [String] = []
+
+    mutating func expect(_ condition: Bool, _ message: String) {
+        if condition {
+            print("PASS: \(message)")
+        } else {
+            failures.append(message)
+            print("FAIL: \(message)")
+        }
+    }
+
+    func finish() -> Never {
+        if failures.isEmpty {
+            print("All checks passed")
+            exit(0)
+        }
+
+        fputs("Failed checks:\n", stderr)
+        for failure in failures {
+            fputs("- \(failure)\n", stderr)
+        }
+        exit(1)
+    }
+}
+
+extension MountProfile {
+    static func example(
+        id: ProfileID = try! ProfileID("lingyuzeng"),
+        displayName: String = "lingyuzeng"
+    ) throws -> MountProfile {
+        MountProfile(
+            id: id,
+            displayName: displayName,
+            endpoint: "https://amiaps3.hzau.edu.cn",
+            bucket: "user-123456789",
+            prefix: "lingyuzeng",
+            mountPath: MountPath(rawValue: "/Volumes/ZeroFS-lingyuzeng"),
+            quota: Quota(gigabytes: 1024),
+            cache: CacheSettings(diskGigabytes: 10, memoryGigabytes: 0.5),
+            ports: PortSet(nfs: 2049, rpc: 17000, metrics: 9091),
+            autoMount: .afterLogin,
+            performanceTestSize: .megabytes(1024)
+        )
+    }
+}

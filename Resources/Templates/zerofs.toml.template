@@ -1,0 +1,31 @@
+[cache]
+dir = "${ZEROFS_CACHE_DIR}"
+disk_size_gb = {{DISK_CACHE_GB}}
+memory_size_gb = {{MEMORY_CACHE_GB}}
+
+[storage]
+url = "{{S3_URL}}"
+encryption_password = "${ZEROFS_PASSWORD}"
+
+[filesystem]
+max_size_gb = {{QUOTA_GB}}
+compression = "zstd-3"
+
+[aws]
+access_key_id = "${AWS_ACCESS_KEY_ID}"
+secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
+endpoint = "{{S3_ENDPOINT}}"
+region = "us-east-1"
+
+[servers.nfs]
+addresses = ["127.0.0.1:{{NFS_PORT}}"]
+
+[servers.rpc]
+addresses = ["127.0.0.1:{{RPC_PORT}}"]
+unix_socket = "{{RPC_UNIX_SOCKET}}"
+
+[prometheus]
+addresses = ["127.0.0.1:{{METRICS_PORT}}"]
+
+[telemetry]
+enabled = false

@@ -1,0 +1,51 @@
+name: Release GitHub Dev DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package GitHub Dev Build
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Run project checks
+        run: |
+          swift build
+          swift run ZeroFSManagerChecks
+
+      - name: Build ad-hoc DMG and ZIP
+        run: Scripts/package-github-dev.sh
+
+      - name: Inspect ad-hoc signature
+        run: Scripts/inspect-signature.sh "dist/ZeroFS Manager.app"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zerofs-manager-github-dev
+          path: |
+            dist/ZeroFS-Manager-dev-adhoc.dmg
+            dist/ZeroFS-Manager-dev-adhoc.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/ZeroFS-Manager-dev-adhoc.dmg
+            dist/ZeroFS-Manager-dev-adhoc.zip
