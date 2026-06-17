@@ -54,3 +54,4 @@ notarytool-profile.json
 # Local assistant scratch state
 .codex/
 .superpowers/
+.gstack/
