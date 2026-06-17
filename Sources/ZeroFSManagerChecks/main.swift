@@ -1024,6 +1024,7 @@ struct ZeroFSManagerChecks {
         checks.expect(reliabilityProbeSource.contains("describeError(error)"), "reliability probe failures preserve actionable command output")
         checks.expect(reliabilityProbeSource.contains("Darwin.lockf"), "probe locks use kernel file locks that release after process crashes")
         checks.expect(reliabilityProbeSource.contains("ProbeRunLockRegistry"), "probe locks also block duplicate in-process acquisition")
+        checks.expect(reliabilityProbeSource.contains("ProbeCleanupDiagnostics"), "probe diagnostics expose cleanup as structured data for UI localization")
         let rootViewSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSManagerUI/ZeroFSManagerRootView.swift"), encoding: .utf8)
         checks.expect(rootViewSource.contains("--env /path/to/.env.local --delete-env-on-exit"), "copy CLI command uses a safe env template instead of writing secrets")
         checks.expect(rootViewSource.contains("LocalPerformanceHelper"), "GitHub-style dev performance tests can run against an existing local mount without helper registration")
@@ -1032,6 +1033,10 @@ struct ZeroFSManagerChecks {
         checks.expect(rootViewSource.contains("requestReliabilityProbe"), "UI can trigger manual reliability probes through confirmation flow")
         checks.expect(rootViewSource.contains("probeConfirmation"), "UI confirms large manual reliability probes")
         checks.expect(rootViewSource.contains("ProbeResultDetailGrid"), "UI shows richer reliability probe result details")
+        checks.expect(rootViewSource.contains("language.probeCleanupSummary"), "UI localizes reliability probe cleanup status values")
+        checks.expect(!rootViewSource.contains("result.diagnostics.cleanupSummary"), "UI does not display English-only cleanup summaries")
+        checks.expect(rootViewSource.contains("ProbeHistoryDisplay.classification"), "probe history rows use display-specific classification")
+        checks.expect(!rootViewSource.contains("history: model.probeResults(for: profile.id)"), "probe history row classification does not use future/full history")
         checks.expect(rootViewSource.contains("setProbeManualSize"), "UI separates manual reliability probe size from scheduled size")
         checks.expect(rootViewSource.contains("lastScheduledProbeAt"), "app scheduler uses explicit last scheduled probe timestamp")
         checks.expect(rootViewSource.contains("lastManualProbeAt"), "app records explicit last manual probe timestamp")
@@ -1057,6 +1062,7 @@ struct ZeroFSManagerChecks {
         checks.expect(rootViewSource.contains("@AppStorage(AppLanguage.storageKey)"), "app persists selected UI language")
         checks.expect(rootViewSource.contains("LanguageMenu(selection:"), "app exposes an in-window language switcher")
         let localizationSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSManagerUI/AppLocalization.swift"), encoding: .utf8)
+        checks.expect(localizationSource.contains("probeCleanupSummary"), "localization formats reliability probe cleanup summaries")
         for languageCase in ["english", "simplifiedChinese", "traditionalChinese", "japanese", "korean"] {
             checks.expect(localizationSource.contains("case \(languageCase)"), "localization supports \(languageCase)")
         }

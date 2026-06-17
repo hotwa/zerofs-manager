@@ -135,6 +135,15 @@ let package = Package(
                 "ZeroFSProbeToolCore"
             ],
             path: "Tests/ZeroFSProbeXCTests"
+        ),
+        .testTarget(
+            name: "ZeroFSManagerUIXCTests",
+            dependencies: [
+                "ZeroFSManagerDomain",
+                "ZeroFSPerformance",
+                "ZeroFSManagerUI"
+            ],
+            path: "Tests/ZeroFSManagerUIXCTests"
         )
     ]
 )

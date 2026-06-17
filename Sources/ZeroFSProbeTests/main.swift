@@ -160,7 +160,8 @@ struct ZeroFSProbeTests {
         checks.expect(abs((result.diagnostics.writeMiBPerSecond ?? 0) - 4) < 0.001, "diagnostics expose write throughput")
         checks.expect(abs((result.diagnostics.readMiBPerSecond ?? 0) - 2) < 0.001, "diagnostics expose read throughput")
         checks.expect(result.diagnostics.durationSeconds == result.durationSeconds, "diagnostics expose duration")
-        checks.expect(result.diagnostics.cleanupSummary == "remote removed, readback removed", "diagnostics expose cleanup state")
+        checks.expect(result.diagnostics.cleanup.remote == .removed, "diagnostics expose structured remote cleanup state")
+        checks.expect(result.diagnostics.cleanup.readback == .removed, "diagnostics expose structured readback cleanup state")
         checks.expect(result.diagnostics.failureReason == "checksum mismatch", "diagnostics expose concise failure")
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import ZeroFSPerformance
 
 enum AppLanguage: String, CaseIterable, Identifiable {
     case english = "en"
@@ -103,6 +104,132 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             "マウント済みオブジェクトストレージのファイルシステム経由で一時的な \(sizeMegabytes) MiB のプローブファイルを書き込み・読み取り、その後削除します。実際のネットワークとオブジェクトストレージのトラフィックが発生します。"
         case .korean:
             "마운트된 오브젝트 스토리지 파일 시스템을 통해 임시 \(sizeMegabytes) MiB 검사 파일을 쓰고 읽은 뒤 삭제합니다. 실제 네트워크와 오브젝트 스토리지 트래픽이 발생합니다."
+        }
+    }
+
+    func probeOutcome(_ outcome: ProbeOutcome) -> String {
+        switch outcome {
+        case .success:
+            switch self {
+            case .english: "Success"
+            case .simplifiedChinese: "成功"
+            case .traditionalChinese: "成功"
+            case .japanese: "成功"
+            case .korean: "성공"
+            }
+        case .degraded:
+            text(.probeDegraded)
+        case .failed:
+            text(.probeFailed)
+        case .skipped:
+            switch self {
+            case .english: "Skipped"
+            case .simplifiedChinese: "已跳过"
+            case .traditionalChinese: "已略過"
+            case .japanese: "スキップ"
+            case .korean: "건너뜀"
+            }
+        }
+    }
+
+    func probeResultSummary(for result: ProbeResult) -> String {
+        let details = result.diagnostics
+        let write = details.writeMiBPerSecond
+            .map { "\(text(.probeWrite)) \(String(format: "%.1f MiB/s", $0))" }
+            ?? "\(text(.probeWrite)) -"
+        let read = details.readMiBPerSecond
+            .map { "\(text(.probeRead)) \(String(format: "%.1f MiB/s", $0))" }
+            ?? "\(text(.probeRead)) -"
+        let duration = "\(text(.probeDuration)) \(String(format: "%.2fs", details.durationSeconds))"
+        return "\(write) · \(read) · \(duration) · \(probeCleanupSummary(for: details.cleanup))"
+    }
+
+    func probeCleanupSummary(for cleanup: ProbeCleanupDiagnostics) -> String {
+        "\(probeCleanupStatus(cleanup.remote, location: .remote))\(probeCleanupSeparator)\(probeCleanupStatus(cleanup.readback, location: .readback))"
+    }
+
+    private enum ProbeCleanupLocation {
+        case remote
+        case readback
+    }
+
+    private var probeCleanupSeparator: String {
+        switch self {
+        case .english, .korean:
+            ", "
+        case .simplifiedChinese, .traditionalChinese:
+            "，"
+        case .japanese:
+            "、"
+        }
+    }
+
+    private func probeCleanupStatus(_ status: CleanupStatus, location: ProbeCleanupLocation) -> String {
+        switch (self, location, status) {
+        case (.english, .remote, .removed):
+            "Remote removed"
+        case (.english, .remote, .notPresent):
+            "Remote not present"
+        case (.english, .remote, .failed(let reason)):
+            "Remote cleanup failed: \(reason)"
+        case (.english, .readback, .removed):
+            "readback removed"
+        case (.english, .readback, .notPresent):
+            "readback not present"
+        case (.english, .readback, .failed(let reason)):
+            "readback cleanup failed: \(reason)"
+
+        case (.simplifiedChinese, .remote, .removed):
+            "远端已删除"
+        case (.simplifiedChinese, .remote, .notPresent):
+            "远端不存在"
+        case (.simplifiedChinese, .remote, .failed(let reason)):
+            "远端清理失败：\(reason)"
+        case (.simplifiedChinese, .readback, .removed):
+            "读回文件已删除"
+        case (.simplifiedChinese, .readback, .notPresent):
+            "读回文件不存在"
+        case (.simplifiedChinese, .readback, .failed(let reason)):
+            "读回文件清理失败：\(reason)"
+
+        case (.traditionalChinese, .remote, .removed):
+            "遠端已刪除"
+        case (.traditionalChinese, .remote, .notPresent):
+            "遠端不存在"
+        case (.traditionalChinese, .remote, .failed(let reason)):
+            "遠端清理失敗：\(reason)"
+        case (.traditionalChinese, .readback, .removed):
+            "讀回檔已刪除"
+        case (.traditionalChinese, .readback, .notPresent):
+            "讀回檔不存在"
+        case (.traditionalChinese, .readback, .failed(let reason)):
+            "讀回檔清理失敗：\(reason)"
+
+        case (.japanese, .remote, .removed):
+            "リモート削除済み"
+        case (.japanese, .remote, .notPresent):
+            "リモートなし"
+        case (.japanese, .remote, .failed(let reason)):
+            "リモート削除失敗: \(reason)"
+        case (.japanese, .readback, .removed):
+            "読み戻し削除済み"
+        case (.japanese, .readback, .notPresent):
+            "読み戻しなし"
+        case (.japanese, .readback, .failed(let reason)):
+            "読み戻し削除失敗: \(reason)"
+
+        case (.korean, .remote, .removed):
+            "원격 삭제됨"
+        case (.korean, .remote, .notPresent):
+            "원격 없음"
+        case (.korean, .remote, .failed(let reason)):
+            "원격 정리 실패: \(reason)"
+        case (.korean, .readback, .removed):
+            "읽기 복사본 삭제됨"
+        case (.korean, .readback, .notPresent):
+            "읽기 복사본 없음"
+        case (.korean, .readback, .failed(let reason)):
+            "읽기 복사본 정리 실패: \(reason)"
         }
     }
 

@@ -571,17 +571,16 @@ private struct ReliabilityProbeSection: View {
                     ForEach(history) { result in
                         HStack(spacing: 8) {
                             ProbeReliabilityIcon(
-                                classification: ReliabilityClassifier.classification(
-                                    settings: ProbeSettings(enabled: true),
-                                    latestResult: result,
-                                    history: model.probeResults(for: profile.id)
+                                classification: ProbeHistoryDisplay.classification(
+                                    for: result,
+                                    in: model.probeResults(for: profile.id)
                                 ),
                                 isRunning: false,
                                 language: language
                             )
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(result.startedAt.formatted(date: .abbreviated, time: .shortened))
-                                Text(result.detailedSummary)
+                                Text(language.probeResultSummary(for: result))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
@@ -622,7 +621,7 @@ private struct ProbeResultDetailGrid: View {
             )
             ProbeDetailPill(
                 title: language.text(.probeCleanup),
-                value: result.diagnostics.cleanupSummary
+                value: language.probeCleanupSummary(for: result.diagnostics.cleanup)
             )
             if let failureReason = result.diagnostics.failureReason, !failureReason.isEmpty {
                 ProbeDetailPill(
@@ -1242,7 +1241,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
         if let failureReason = latest.failureReason, !failureReason.isEmpty {
             return failureReason
         }
-        return "\(latest.outcome.rawValue) · \(latest.detailedSummary)"
+        return "\(language.probeOutcome(latest.outcome)) · \(language.probeResultSummary(for: latest))"
     }
 
     func setProbeSchedule(_ id: ProfileID, enabled: Bool) {
@@ -2618,17 +2617,26 @@ private extension ReliabilityClassification {
     }
 }
 
+enum ProbeHistoryDisplay {
+    static func priorResults(for result: ProbeResult, in history: [ProbeResult]) -> [ProbeResult] {
+        history.filter { candidate in
+            candidate.profileID == result.profileID &&
+                candidate.startedAt < result.startedAt
+        }
+    }
+
+    static func classification(for result: ProbeResult, in history: [ProbeResult]) -> ReliabilityClassification {
+        ReliabilityClassifier.classification(
+            settings: ProbeSettings(enabled: true),
+            latestResult: result,
+            history: priorResults(for: result, in: history)
+        )
+    }
+}
+
 private extension ProbeResult {
     var compactSummary: String {
         "\(Int(sizeBytes / 1_048_576)) MiB"
-    }
-
-    var detailedSummary: String {
-        let details = self.diagnostics
-        let write = details.writeMiBPerSecond.map { String(format: "W %.1f MiB/s", $0) } ?? "W -"
-        let read = details.readMiBPerSecond.map { String(format: "R %.1f MiB/s", $0) } ?? "R -"
-        let duration = String(format: "%.2fs", details.durationSeconds)
-        return "\(write) · \(read) · \(duration) · \(details.cleanupSummary)"
     }
 }
 

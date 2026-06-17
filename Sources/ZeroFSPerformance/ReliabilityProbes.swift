@@ -193,24 +193,38 @@ public struct ProbeResult: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct ProbeCleanupDiagnostics: Equatable, Sendable {
+    public var remote: CleanupStatus
+    public var readback: CleanupStatus
+
+    public init(remote: CleanupStatus, readback: CleanupStatus) {
+        self.remote = remote
+        self.readback = readback
+    }
+}
+
 public struct ProbeResultDiagnostics: Equatable, Sendable {
     public var writeMiBPerSecond: Double?
     public var readMiBPerSecond: Double?
     public var durationSeconds: TimeInterval
-    public var cleanupSummary: String
+    public var cleanup: ProbeCleanupDiagnostics
     public var failureReason: String?
+
+    public var cleanupSummary: String {
+        "remote \(cleanup.remote.diagnosticLabel), readback \(cleanup.readback.diagnosticLabel)"
+    }
 
     public init(
         writeMiBPerSecond: Double?,
         readMiBPerSecond: Double?,
         durationSeconds: TimeInterval,
-        cleanupSummary: String,
+        cleanup: ProbeCleanupDiagnostics,
         failureReason: String?
     ) {
         self.writeMiBPerSecond = writeMiBPerSecond
         self.readMiBPerSecond = readMiBPerSecond
         self.durationSeconds = durationSeconds
-        self.cleanupSummary = cleanupSummary
+        self.cleanup = cleanup
         self.failureReason = failureReason
     }
 }
@@ -990,7 +1004,7 @@ public extension ProbeResult {
             writeMiBPerSecond: writeBytesPerSecond.map { $0 / 1_048_576 },
             readMiBPerSecond: readBytesPerSecond.map { $0 / 1_048_576 },
             durationSeconds: durationSeconds,
-            cleanupSummary: "remote \(remoteCleanup.diagnosticLabel), readback \(readbackCleanup.diagnosticLabel)",
+            cleanup: ProbeCleanupDiagnostics(remote: remoteCleanup, readback: readbackCleanup),
             failureReason: failureReason
         )
     }
