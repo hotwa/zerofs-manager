@@ -99,6 +99,7 @@ MOUNT_LABEL="$LABEL_PREFIX.mount"
 PROBE_LABEL="$LABEL_PREFIX.probe"
 PROFILE_ROOT="/Library/Application Support/ZeroFSManager/Profiles/$PROFILE_ID"
 PROBE_RESULT_ROOT="/Library/Application Support/ZeroFSManager/ProbeResults/$PROFILE_ID"
+PROBE_LOCK_ROOT="/tmp/zerofs-manager-probe-locks"
 CACHE_DIR="/var/cache/zerofs-manager/$PROFILE_ID"
 LOG_ROOT="/Library/Logs/ZeroFSManager/$PROFILE_ID"
 ENV_PATH="$PROFILE_ROOT/zerofs.env"
@@ -139,6 +140,11 @@ if [[ -n "$MOUNT_POINT" ]] && /sbin/mount | /usr/bin/grep -Fq " on $MOUNT_POINT 
 fi
 
 sudo rm -f "$PROBE_PLIST" "$MOUNT_PLIST" "$RUNTIME_PLIST"
+case "$PROBE_LOCK_ROOT/$PROFILE_ID.lock" in
+  "/tmp/zerofs-manager-probe-locks/$PROFILE_ID.lock")
+    sudo rm -rf "$PROBE_LOCK_ROOT/$PROFILE_ID.lock"
+    ;;
+esac
 
 if [[ "$KEEP_RUNTIME" != "1" ]]; then
   case "$PROFILE_ROOT" in

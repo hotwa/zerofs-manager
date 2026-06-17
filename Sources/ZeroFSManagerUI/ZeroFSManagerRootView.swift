@@ -486,7 +486,7 @@ private struct ReliabilityProbeSection: View {
                 Text("15 min").tag(900)
                 Text("30 min").tag(1_800)
                 Text("60 min").tag(3_600)
-                Text("120 min").tag(7_200)
+                Text("3 h").tag(10_800)
             }
             .pickerStyle(.segmented)
             .disabled(!settings.enabled)
@@ -497,7 +497,6 @@ private struct ReliabilityProbeSection: View {
             )) {
                 Text("1 MiB").tag(Int64(1 * 1_048_576))
                 Text("4 MiB").tag(Int64(4 * 1_048_576))
-                Text("8 MiB").tag(Int64(8 * 1_048_576))
                 Text("16 MiB").tag(Int64(16 * 1_048_576))
             }
             .pickerStyle(.segmented)
@@ -1243,7 +1242,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
             sizeBytes: min(probeSettings(for: id).sizeBytes, ProbeDefaults.manualMaxSizeBytesWithoutConfirmation),
             trigger: trigger
         )
-        appendProbeResult(result)
+        appendProbeResult(result, redactingSecrets: redactionSecrets(for: profile))
         if let index = profiles.firstIndex(where: { $0.id == id }) {
             profiles[index].lastError = reliabilitySummary(for: id, language: language)
             if result.outcome == .failed {
@@ -1415,17 +1414,18 @@ final class ZeroFSManagerViewModel: ObservableObject {
         }
     }
 
-    private func appendProbeResult(_ result: ProbeResult) {
+    private func appendProbeResult(_ result: ProbeResult, redactingSecrets: [String] = []) {
+        let sanitizedResult = result.sanitizedForStorage(redactingSecrets: redactingSecrets)
         do {
-            try probeResultStore.append(result)
+            try probeResultStore.append(sanitizedResult, redactingSecrets: redactingSecrets)
         } catch {
             notifications.append(MountNotification(
-                profileID: result.profileID,
+                profileID: sanitizedResult.profileID,
                 title: language.text(.profileSaveFailedTitle),
                 body: String(describing: error)
             ))
         }
-        probeResultsByProfile[result.profileID] = loadMergedProbeResults(profileID: result.profileID)
+        probeResultsByProfile[sanitizedResult.profileID] = loadMergedProbeResults(profileID: sanitizedResult.profileID)
     }
 
     private func refreshBackgroundProbeResults() {

@@ -223,10 +223,10 @@ public struct FileProbeResultStore {
         directoryURL.appendingPathComponent(sanitizedProfileFileName(profileID.rawValue), isDirectory: false)
     }
 
-    public func append(_ result: ProbeResult) throws {
+    public func append(_ result: ProbeResult, redactingSecrets: [String] = []) throws {
         var results = try read(profileID: result.profileID)
-        results.append(result.sanitizedForStorage())
-        try write(retained(results, now: Date()), for: result.profileID)
+        results.append(result.sanitizedForStorage(redactingSecrets: redactingSecrets))
+        try write(retained(results, now: Date(), redactingSecrets: redactingSecrets), for: result.profileID, redactingSecrets: redactingSecrets)
     }
 
     public func load(profileID: ProfileID) throws -> [ProbeResult] {
@@ -249,19 +249,19 @@ public struct FileProbeResultStore {
         return try decoder.decode([ProbeResult].self, from: data)
     }
 
-    private func write(_ results: [ProbeResult], for profileID: ProfileID) throws {
+    private func write(_ results: [ProbeResult], for profileID: ProfileID, redactingSecrets: [String] = []) throws {
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(results.map { $0.sanitizedForStorage() })
+        try encoder.encode(results.map { $0.sanitizedForStorage(redactingSecrets: redactingSecrets) })
             .write(to: fileURL(for: profileID), options: .atomic)
     }
 
-    private func retained(_ results: [ProbeResult], now: Date) -> [ProbeResult] {
+    private func retained(_ results: [ProbeResult], now: Date, redactingSecrets: [String] = []) -> [ProbeResult] {
         let cutoff = now.addingTimeInterval(-retention.maxAgeSeconds)
         return results
-            .map { $0.sanitizedForStorage() }
+            .map { $0.sanitizedForStorage(redactingSecrets: redactingSecrets) }
             .filter { retention.maxAgeSeconds == 0 ? $0.startedAt >= now : $0.startedAt >= cutoff }
             .sorted { lhs, rhs in
                 if lhs.startedAt == rhs.startedAt {
@@ -311,6 +311,14 @@ public struct ProbeRunLock: Sendable {
         now: Date = Date(),
         processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier
     ) throws -> ProbeRunLockHandle? {
+        #if canImport(Darwin)
+        return try acquireFileLock(now: now, processIdentifier: processIdentifier)
+        #else
+        return try acquireDirectoryLock(now: now, processIdentifier: processIdentifier)
+        #endif
+    }
+
+    private func acquireDirectoryLock(now: Date, processIdentifier: Int32) throws -> ProbeRunLockHandle? {
         try FileManager.default.createDirectory(
             at: lockDirectory.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -335,6 +343,79 @@ public struct ProbeRunLock: Sendable {
             }
         }
     }
+
+    #if canImport(Darwin)
+    private func acquireFileLock(now: Date, processIdentifier: Int32) throws -> ProbeRunLockHandle? {
+        try FileManager.default.createDirectory(
+            at: lockDirectory.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        guard ProbeRunLockRegistry.shared.acquire(lockDirectory.path) else {
+            return nil
+        }
+
+        var fileDescriptor = Darwin.open(lockDirectory.path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH)
+        var canWriteMetadata = true
+        if fileDescriptor == -1 && (errno == EACCES || errno == EISDIR) {
+            fileDescriptor = Darwin.open(lockDirectory.path, O_RDONLY)
+            canWriteMetadata = false
+        }
+        guard fileDescriptor != -1 else {
+            ProbeRunLockRegistry.shared.release(lockDirectory.path)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+
+        if Darwin.lockf(fileDescriptor, F_TLOCK, 0) != 0 {
+            let lockError = errno
+            Darwin.close(fileDescriptor)
+            ProbeRunLockRegistry.shared.release(lockDirectory.path)
+            if !canWriteMetadata && lockError == EBADF {
+                return try acquireDirectoryLock(now: now, processIdentifier: processIdentifier)
+            }
+            if lockError == EACCES || lockError == EAGAIN {
+                return nil
+            }
+            throw POSIXError(POSIXErrorCode(rawValue: lockError) ?? .EIO)
+        }
+
+        if canWriteMetadata {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o666], ofItemAtPath: lockDirectory.path)
+            writeMetadata(processIdentifier: processIdentifier, startedAt: now, to: fileDescriptor)
+        }
+
+        return ProbeRunLockHandle(lockDirectory: lockDirectory, fileDescriptor: fileDescriptor, registryPath: lockDirectory.path)
+    }
+
+    private func writeMetadata(processIdentifier: Int32, startedAt: Date, to fileDescriptor: Int32) {
+        let metadata = ProbeRunLockMetadata(pid: processIdentifier, startedAt: startedAt)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard var data = try? encoder.encode(metadata) else {
+            return
+        }
+        data.append(Data("\n".utf8))
+
+        guard Darwin.ftruncate(fileDescriptor, 0) == 0,
+              Darwin.lseek(fileDescriptor, 0, SEEK_SET) != -1 else {
+            return
+        }
+        data.withUnsafeBytes { rawBuffer in
+            guard var pointer = rawBuffer.baseAddress, rawBuffer.count > 0 else {
+                return
+            }
+            var remaining = rawBuffer.count
+            while remaining > 0 {
+                let written = Darwin.write(fileDescriptor, pointer, remaining)
+                if written <= 0 {
+                    break
+                }
+                remaining -= written
+                pointer = pointer.advanced(by: written)
+            }
+        }
+    }
+    #endif
 
     private func createLock(processIdentifier: Int32, startedAt: Date) throws {
         try FileManager.default.createDirectory(at: lockDirectory, withIntermediateDirectories: false)
@@ -385,15 +466,54 @@ public struct ProbeRunLock: Sendable {
 
 public struct ProbeRunLockHandle: Sendable {
     public var lockDirectory: URL
+    private var fileDescriptor: Int32?
+    private var registryPath: String?
 
-    public init(lockDirectory: URL) {
+    public init(lockDirectory: URL, fileDescriptor: Int32? = nil, registryPath: String? = nil) {
         self.lockDirectory = lockDirectory
+        self.fileDescriptor = fileDescriptor
+        self.registryPath = registryPath
     }
 
     public func release() {
+        #if canImport(Darwin)
+        if let fileDescriptor {
+            _ = Darwin.lockf(fileDescriptor, F_ULOCK, 0)
+            _ = Darwin.close(fileDescriptor)
+            if let registryPath {
+                ProbeRunLockRegistry.shared.release(registryPath)
+            }
+            return
+        }
+        #endif
         try? FileManager.default.removeItem(at: lockDirectory)
     }
 }
+
+#if canImport(Darwin)
+private final class ProbeRunLockRegistry: @unchecked Sendable {
+    static let shared = ProbeRunLockRegistry()
+
+    private let lock = NSLock()
+    private var activePaths = Set<String>()
+
+    func acquire(_ path: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !activePaths.contains(path) else {
+            return false
+        }
+        activePaths.insert(path)
+        return true
+    }
+
+    func release(_ path: String) {
+        lock.lock()
+        activePaths.remove(path)
+        lock.unlock()
+    }
+}
+#endif
 
 private struct ProbeRunLockMetadata: Codable {
     var pid: Int32
@@ -701,7 +821,7 @@ private extension CleanupStatus {
     }
 }
 
-private extension ProbeResult {
+public extension ProbeResult {
     var isVerySlow: Bool {
         if writeSeconds >= ProbeDefaults.degradedOperationSeconds ||
             readSeconds >= ProbeDefaults.degradedOperationSeconds {
@@ -714,7 +834,7 @@ private extension ProbeResult {
             readThroughput < ProbeDefaults.degradedThroughputBytesPerSecond
     }
 
-    func sanitizedForStorage() -> ProbeResult {
+    func sanitizedForStorage(redactingSecrets: [String] = []) -> ProbeResult {
         ProbeResult(
             id: id,
             profileID: profileID,
@@ -726,34 +846,34 @@ private extension ProbeResult {
             writeSeconds: writeSeconds,
             readSeconds: readSeconds,
             checksumStatus: checksumStatus,
-            remoteCleanup: remoteCleanup.sanitizedForStorage(),
-            readbackCleanup: readbackCleanup.sanitizedForStorage(),
-            dfBeforeWrite: dfBeforeWrite?.sanitizedForStorage(),
-            dfAfterWrite: dfAfterWrite?.sanitizedForStorage(),
-            dfAfterCleanup: dfAfterCleanup?.sanitizedForStorage(),
-            metricsSummary: ProbeResultSanitizer.sanitize(metricsSummary),
-            failureReason: failureReason.map(ProbeResultSanitizer.sanitize)
+            remoteCleanup: remoteCleanup.sanitizedForStorage(redactingSecrets: redactingSecrets),
+            readbackCleanup: readbackCleanup.sanitizedForStorage(redactingSecrets: redactingSecrets),
+            dfBeforeWrite: dfBeforeWrite?.sanitizedForStorage(redactingSecrets: redactingSecrets),
+            dfAfterWrite: dfAfterWrite?.sanitizedForStorage(redactingSecrets: redactingSecrets),
+            dfAfterCleanup: dfAfterCleanup?.sanitizedForStorage(redactingSecrets: redactingSecrets),
+            metricsSummary: ProbeResultSanitizer.sanitize(metricsSummary, redactingSecrets: redactingSecrets),
+            failureReason: failureReason.map { ProbeResultSanitizer.sanitize($0, redactingSecrets: redactingSecrets) }
         )
     }
 }
 
 private extension CleanupStatus {
-    func sanitizedForStorage() -> CleanupStatus {
+    func sanitizedForStorage(redactingSecrets: [String] = []) -> CleanupStatus {
         switch self {
         case .removed, .notPresent:
             return self
         case .failed(let reason):
-            return .failed(ProbeResultSanitizer.sanitize(reason))
+            return .failed(ProbeResultSanitizer.sanitize(reason, redactingSecrets: redactingSecrets))
         }
     }
 }
 
 private extension DiskUsageSnapshot {
-    func sanitizedForStorage() -> DiskUsageSnapshot {
+    func sanitizedForStorage(redactingSecrets: [String] = []) -> DiskUsageSnapshot {
         DiskUsageSnapshot(
             phase: phase,
-            path: ProbeResultSanitizer.sanitize(path),
-            rawOutput: ProbeResultSanitizer.sanitize(rawOutput)
+            path: ProbeResultSanitizer.sanitize(path, redactingSecrets: redactingSecrets),
+            rawOutput: ProbeResultSanitizer.sanitize(rawOutput, redactingSecrets: redactingSecrets)
         )
     }
 }
@@ -762,12 +882,16 @@ private enum ProbeResultSanitizer {
     private static let maxStringLength = 8_192
     private static let redaction = "[REDACTED]"
     private static let patterns = [
+        #"(?i)(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|ZEROFS_PASSWORD|S3_ACCESS_KEY|S3_SECRET_KEY|access_key_id|secret_access_key|encryption_password)\s*[:=]\s*['"]?[^'"\s]+"#,
         #"AK[A-Z0-9]{16,}"#,
         #"[A-Za-z0-9+/=]{32,}"#
     ]
 
-    static func sanitize(_ value: String) -> String {
+    static func sanitize(_ value: String, redactingSecrets: [String] = []) -> String {
         var sanitized = value
+        for secret in normalizedSecrets(redactingSecrets) {
+            sanitized = sanitized.replacingOccurrences(of: secret, with: redaction)
+        }
         for pattern in patterns {
             sanitized = replacing(pattern: pattern, in: sanitized)
         }
@@ -783,6 +907,12 @@ private enum ProbeResultSanitizer {
         }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         return regex.stringByReplacingMatches(in: value, range: range, withTemplate: redaction)
+    }
+
+    private static func normalizedSecrets(_ secrets: [String]) -> [String] {
+        Array(Set(secrets.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 3 }))
+            .sorted { $0.count > $1.count }
     }
 }
 

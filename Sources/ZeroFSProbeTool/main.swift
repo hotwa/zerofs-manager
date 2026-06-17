@@ -12,30 +12,14 @@ struct ZeroFSProbeTool {
         do {
             let arguments = try ProbeToolArguments.parse(CommandLine.arguments)
             let resultStore = FileProbeResultStore(directoryURL: arguments.resultDirectory)
+            let redactionSecrets = Self.redactionSecretsFromEnvironment()
 
             let lockHandle: ProbeRunLockHandle?
             if let lockDirectory = arguments.lockDirectory {
                 guard let acquiredLock = try ProbeRunLock(lockDirectory: lockDirectory).acquire() else {
-                    let skipped = ProbeResult(
-                        profileID: arguments.profileID,
-                        trigger: arguments.trigger,
-                        outcome: .skipped,
-                        startedAt: Date(),
-                        endedAt: Date(),
-                        sizeBytes: arguments.sizeBytes,
-                        writeSeconds: 0,
-                        readSeconds: 0,
-                        checksumStatus: .pass,
-                        remoteCleanup: .notPresent,
-                        readbackCleanup: .notPresent,
-                        dfBeforeWrite: nil,
-                        dfAfterWrite: nil,
-                        dfAfterCleanup: nil,
-                        metricsSummary: "probe skipped",
-                        failureReason: "previous probe is already running"
-                    )
-                    try resultStore.append(skipped)
-                    try writeResultJSON(skipped)
+                    let skipped = makeSkippedResult(arguments: arguments, reason: "previous probe is already running")
+                    try resultStore.append(skipped, redactingSecrets: redactionSecrets)
+                    try writeResultJSON(skipped.sanitizedForStorage(redactingSecrets: redactionSecrets))
                     throw ProbeToolExit.code(75)
                 }
                 lockHandle = acquiredLock
@@ -43,6 +27,13 @@ struct ZeroFSProbeTool {
                 lockHandle = nil
             }
             defer { lockHandle?.release() }
+
+            if let skipReason = arguments.skipReason {
+                let skipped = makeSkippedResult(arguments: arguments, reason: skipReason)
+                try resultStore.append(skipped, redactingSecrets: redactionSecrets)
+                try writeResultJSON(skipped.sanitizedForStorage(redactingSecrets: redactionSecrets))
+                throw ProbeToolExit.code(75)
+            }
 
             let helper = ShellPerformanceHelper(
                 zerofsBinaryURL: arguments.zerofsBinary,
@@ -71,10 +62,11 @@ struct ZeroFSProbeTool {
                 sizeBytes: arguments.sizeBytes,
                 trigger: arguments.trigger
             )
-            try resultStore.append(result)
-            try writeResultJSON(result)
+            try resultStore.append(result, redactingSecrets: redactionSecrets)
+            let sanitizedResult = result.sanitizedForStorage(redactingSecrets: redactionSecrets)
+            try writeResultJSON(sanitizedResult)
 
-            switch result.outcome {
+            switch sanitizedResult.outcome {
             case .success, .degraded:
                 return
             case .failed:
@@ -101,6 +93,37 @@ struct ZeroFSProbeTool {
         try FileHandle.standardOutput.write(contentsOf: Data("\n".utf8))
     }
 
+    private static func makeSkippedResult(arguments: ProbeToolArguments, reason: String) -> ProbeResult {
+        ProbeResult(
+            profileID: arguments.profileID,
+            trigger: arguments.trigger,
+            outcome: .skipped,
+            startedAt: Date(),
+            endedAt: Date(),
+            sizeBytes: arguments.sizeBytes,
+            writeSeconds: 0,
+            readSeconds: 0,
+            checksumStatus: .pass,
+            remoteCleanup: .notPresent,
+            readbackCleanup: .notPresent,
+            dfBeforeWrite: nil,
+            dfAfterWrite: nil,
+            dfAfterCleanup: nil,
+            metricsSummary: "probe skipped",
+            failureReason: reason
+        )
+    }
+
+    private static func redactionSecretsFromEnvironment() -> [String] {
+        let environment = ProcessInfo.processInfo.environment
+        return [
+            environment["AWS_ACCESS_KEY_ID"],
+            environment["AWS_SECRET_ACCESS_KEY"],
+            environment["ZEROFS_PASSWORD"],
+            environment["S3_ACCESS_KEY"],
+            environment["S3_SECRET_KEY"]
+        ].compactMap { $0 }.filter { !$0.isEmpty }
+    }
 }
 
 private enum ProbeToolExit: Error {
@@ -118,9 +141,10 @@ private struct ProbeToolArguments {
     var configFile: URL
     var lockDirectory: URL?
     var trigger: ProbeTrigger
+    var skipReason: String?
 
     static let usage = """
-    Usage: ZeroFSProbeTool --profile-id ID --mount-point PATH --size-bytes BYTES --result-dir PATH --work-dir PATH --zerofs-bin PATH --config PATH --trigger manual|in-app-schedule|background-launchdaemon [--metrics-port PORT] [--lock-dir PATH]
+    Usage: ZeroFSProbeTool --profile-id ID --mount-point PATH --size-bytes BYTES --result-dir PATH --work-dir PATH --zerofs-bin PATH --config PATH --trigger manual|in-app-schedule|background-launchdaemon [--metrics-port PORT] [--lock-dir PATH] [--skip-reason REASON]
     """
 
     static func parse(_ commandLine: [String]) throws -> ProbeToolArguments {
@@ -163,7 +187,8 @@ private struct ProbeToolArguments {
             zerofsBinary: URL(fileURLWithPath: zerofsBinary, isDirectory: false),
             configFile: URL(fileURLWithPath: configFile, isDirectory: false),
             lockDirectory: values["--lock-dir"].map { URL(fileURLWithPath: $0, isDirectory: true) },
-            trigger: trigger
+            trigger: trigger,
+            skipReason: values["--skip-reason"]
         )
     }
 

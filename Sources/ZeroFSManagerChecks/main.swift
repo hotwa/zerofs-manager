@@ -824,11 +824,18 @@ struct ZeroFSManagerChecks {
         let retained = try resultStore.load(profileID: profileID)
         checks.expect(retained.count == 3, "probe result store prunes by age and count")
         checks.expect(!retained.contains(where: { $0.startedAt == old.startedAt }), "probe result store drops expired records")
-        let serializedResults = try String(contentsOf: resultStore.fileURL(for: profileID), encoding: .utf8)
         let fixtureAccessKey = "AKPROBESECRETSTRING0000"
         let fixtureSecretKey = "probe-secret-fixture-with-entropy-1234567890"
+        let fixtureShortPassword = "p@55"
+        var secretBearing = healthy
+        secretBearing.id = UUID()
+        secretBearing.metricsSummary = "AWS_ACCESS_KEY_ID=\(fixtureAccessKey) ZEROFS_PASSWORD=\(fixtureShortPassword)"
+        secretBearing.failureReason = "flush output leaked \(fixtureSecretKey) and \(fixtureShortPassword)"
+        try resultStore.append(secretBearing, redactingSecrets: [fixtureAccessKey, fixtureSecretKey, fixtureShortPassword])
+        let serializedResults = try String(contentsOf: resultStore.fileURL(for: profileID), encoding: .utf8)
         checks.expect(!serializedResults.contains(fixtureAccessKey), "probe result history does not contain access keys")
         checks.expect(!serializedResults.contains(fixtureSecretKey), "probe result history does not contain secret keys")
+        checks.expect(!serializedResults.contains(fixtureShortPassword), "probe result history redacts profile-provided short passwords")
 
         let backgroundStore = FileProbeResultStore(
             directoryURL: storeRoot
@@ -945,10 +952,14 @@ struct ZeroFSManagerChecks {
         checks.expect(packageSource.contains("name: \"ZeroFSProbeTool\""), "Swift package builds ZeroFSProbeTool target")
         let probeToolSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSProbeTool/main.swift"), encoding: .utf8)
         checks.expect(probeToolSource.contains("ProbeToolExit.code(1)"), "ZeroFSProbeTool failure exits unwind lock cleanup before returning status")
+        checks.expect(probeToolSource.contains("redactionSecretsFromEnvironment"), "ZeroFSProbeTool redacts secrets from the root runtime environment")
+        checks.expect(probeToolSource.contains("--skip-reason"), "ZeroFSProbeTool can persist skipped background probe results")
         checks.expect(!probeToolSource.contains("case .failed:\n                terminate(1)"), "ZeroFSProbeTool does not exit directly while holding a probe lock")
         checks.expect(!probeToolSource.contains("case .skipped:\n                terminate(75)"), "ZeroFSProbeTool does not exit directly while holding a probe lock after skipped runs")
         let reliabilityProbeSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSPerformance/ReliabilityProbes.swift"), encoding: .utf8)
         checks.expect(reliabilityProbeSource.contains("describeError(error)"), "reliability probe failures preserve actionable command output")
+        checks.expect(reliabilityProbeSource.contains("Darwin.lockf"), "probe locks use kernel file locks that release after process crashes")
+        checks.expect(reliabilityProbeSource.contains("ProbeRunLockRegistry"), "probe locks also block duplicate in-process acquisition")
         let rootViewSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSManagerUI/ZeroFSManagerRootView.swift"), encoding: .utf8)
         checks.expect(rootViewSource.contains("--env /path/to/.env.local --delete-env-on-exit"), "copy CLI command uses a safe env template instead of writing secrets")
         checks.expect(rootViewSource.contains("LocalPerformanceHelper"), "GitHub-style dev performance tests can run against an existing local mount without helper registration")
@@ -1057,6 +1068,7 @@ struct ZeroFSManagerChecks {
         checks.expect(profileInstallScript.contains("probe-zerofs.sh"), "profile launchd installer generates a root-owned probe wrapper")
         checks.expect(profileInstallScript.contains("source $(shell_quote \"$ENV_PATH\")"), "probe wrapper sources root-only env before running ZeroFSProbeTool")
         checks.expect(profileInstallScript.contains("Skipping probe because mount is not ready"), "probe wrapper waits for mount readiness before writing")
+        checks.expect(profileInstallScript.contains("--skip-reason"), "probe wrapper records sanitized skipped results when mount readiness times out")
         checks.expect(profileInstallScript.contains("chmod 1777 \"$PROBE_LOCK_ROOT\""), "probe lock root is shared between GUI and root daemon")
         let profileUninstallScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-uninstall-profile-launchdaemon.sh"), encoding: .utf8)
         checks.expect(profileUninstallScript.contains("launchctl bootout system"), "profile launchd uninstaller stops system LaunchDaemons")
@@ -1066,6 +1078,7 @@ struct ZeroFSManagerChecks {
         checks.expect(profileUninstallScript.contains("is_safe_mount_point"), "profile launchd uninstaller validates mount points before unmounting")
         checks.expect(profileUninstallScript.contains("^[a-z0-9][a-z0-9-]{0,62}$"), "profile launchd uninstaller uses app-compatible profile ids")
         checks.expect(profileUninstallScript.contains("sudo rm -f \"$PROBE_PLIST\" \"$MOUNT_PLIST\" \"$RUNTIME_PLIST\""), "profile launchd uninstaller removes installed plists")
+        checks.expect(profileUninstallScript.contains("PROBE_LOCK_ROOT"), "profile launchd uninstaller removes profile probe locks")
         checks.expect(profileUninstallScript.contains("--keep-runtime"), "profile launchd uninstaller can preserve runtime files for debugging")
         checks.expect(profileUninstallScript.contains("PROBE_LABEL"), "profile launchd uninstaller stops probe LaunchDaemon")
         checks.expect(profileUninstallScript.contains("PROBE_RESULT_ROOT"), "profile launchd uninstaller knows sanitized probe result storage")

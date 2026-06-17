@@ -458,6 +458,18 @@ set -a
 source $(shell_quote "$ENV_PATH")
 set +a
 MOUNT_POINT=$(shell_quote "$ZEROFS_MOUNT_POINT")
+probe_args=(
+  --profile-id $(shell_quote "$ZEROFS_PROFILE_ID")
+  --mount-point $(shell_quote "$ZEROFS_MOUNT_POINT")
+  --size-bytes $(shell_quote "$ZEROFS_PROBE_SIZE_BYTES")
+  --metrics-port $(shell_quote "$ZEROFS_METRICS_PORT")
+  --result-dir $(shell_quote "$PROBE_RESULT_ROOT")
+  --work-dir $(shell_quote "$PROFILE_ROOT/probe-work")
+  --zerofs-bin $(shell_quote "$STAGED_ZEROFS_BIN")
+  --config $(shell_quote "$CONFIG_PATH")
+  --lock-dir $(shell_quote "$PROBE_LOCK_ROOT/$ZEROFS_PROFILE_ID.lock")
+  --trigger backgroundLaunchDaemon
+)
 ready="false"
 for _ in {1..60}; do
   if /sbin/mount | /usr/bin/grep -Fq " on \${MOUNT_POINT} "; then
@@ -468,19 +480,9 @@ for _ in {1..60}; do
 done
 if [[ "\${ready}" != "true" ]]; then
   echo "Skipping probe because mount is not ready: \${MOUNT_POINT}" >&2
-  exit 75
+  exec $(shell_quote "$STAGED_PROBE_TOOL") "\${probe_args[@]}" --skip-reason "mount is not ready: \${MOUNT_POINT}"
 fi
-exec $(shell_quote "$STAGED_PROBE_TOOL") \\
-  --profile-id $(shell_quote "$ZEROFS_PROFILE_ID") \\
-  --mount-point $(shell_quote "$ZEROFS_MOUNT_POINT") \\
-  --size-bytes $(shell_quote "$ZEROFS_PROBE_SIZE_BYTES") \\
-  --metrics-port $(shell_quote "$ZEROFS_METRICS_PORT") \\
-  --result-dir $(shell_quote "$PROBE_RESULT_ROOT") \\
-  --work-dir $(shell_quote "$PROFILE_ROOT/probe-work") \\
-  --zerofs-bin $(shell_quote "$STAGED_ZEROFS_BIN") \\
-  --config $(shell_quote "$CONFIG_PATH") \\
-  --lock-dir $(shell_quote "$PROBE_LOCK_ROOT/$ZEROFS_PROFILE_ID.lock") \\
-  --trigger backgroundLaunchDaemon
+exec $(shell_quote "$STAGED_PROBE_TOOL") "\${probe_args[@]}"
 PROBE
 
   cat > "$TMP_DIR/probe.plist" <<PLIST
@@ -554,6 +556,11 @@ if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
   sudo /usr/bin/install -o root -g wheel -m 0644 "$TMP_DIR/probe.plist" "$PROBE_PLIST"
 else
   sudo rm -f "$PROBE_PLIST" "$PROBE_SCRIPT" "$STAGED_PROBE_TOOL"
+  case "$PROBE_LOCK_ROOT/$ZEROFS_PROFILE_ID.lock" in
+    "/tmp/zerofs-manager-probe-locks/$ZEROFS_PROFILE_ID.lock")
+      sudo rm -rf "$PROBE_LOCK_ROOT/$ZEROFS_PROFILE_ID.lock"
+      ;;
+  esac
 fi
 
 echo "Runtime config written to: $PROFILE_ROOT"
