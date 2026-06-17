@@ -55,7 +55,11 @@ cp "$APP_ICON" "$APP_PATH/Contents/Resources/ZeroFSManager.icns"
 
 cp "$BIN_PATH/ZeroFSManagerApp" "$APP_PATH/Contents/MacOS/ZeroFSManagerApp"
 cp "$BIN_PATH/ZeroFSPrivilegedHelper" "$APP_PATH/Contents/MacOS/ZeroFSPrivilegedHelper"
-chmod 755 "$APP_PATH/Contents/MacOS/ZeroFSManagerApp" "$APP_PATH/Contents/MacOS/ZeroFSPrivilegedHelper"
+cp "$BIN_PATH/ZeroFSProbeTool" "$APP_PATH/Contents/MacOS/ZeroFSProbeTool"
+chmod 755 \
+  "$APP_PATH/Contents/MacOS/ZeroFSManagerApp" \
+  "$APP_PATH/Contents/MacOS/ZeroFSPrivilegedHelper" \
+  "$APP_PATH/Contents/MacOS/ZeroFSProbeTool"
 
 cp "$PROJECT_ROOT/Resources/LaunchDaemons/com.zerofs.manager.helper.plist" \
   "$APP_PATH/Contents/Library/LaunchDaemons/com.zerofs.manager.helper.plist"

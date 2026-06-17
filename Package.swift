@@ -16,6 +16,7 @@ let package = Package(
         .library(name: "ZeroFSPerformance", targets: ["ZeroFSPerformance"]),
         .library(name: "ZeroFSPackagingSupport", targets: ["ZeroFSPackagingSupport"]),
         .library(name: "ZeroFSPrivilegedHelperCore", targets: ["ZeroFSPrivilegedHelperCore"]),
+        .executable(name: "ZeroFSProbeTool", targets: ["ZeroFSProbeTool"]),
         .executable(name: "ZeroFSManagerChecks", targets: ["ZeroFSManagerChecks"])
     ],
     targets: [
@@ -84,6 +85,14 @@ let package = Package(
             name: "ZeroFSPackagingSupport",
             dependencies: ["ZeroFSManagerDomain"],
             path: "Sources/ZeroFSPackagingSupport"
+        ),
+        .executableTarget(
+            name: "ZeroFSProbeTool",
+            dependencies: [
+                "ZeroFSManagerDomain",
+                "ZeroFSPerformance"
+            ],
+            path: "Sources/ZeroFSProbeTool"
         ),
         .executableTarget(
             name: "ZeroFSManagerChecks",

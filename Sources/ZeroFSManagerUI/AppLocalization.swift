@@ -227,6 +227,26 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .githubDevLaunchDaemonNote: "GitHub builds use reviewed sudo scripts. Current profile parameters are written to root-owned config/env files, then the matching LaunchDaemon is restarted.",
             .quota: "Quota",
             .performanceTest: "Performance Test",
+            .reliabilityProbe: "Reliability Probe",
+            .probeTestNow: "Test Now",
+            .probeScheduled: "Scheduled",
+            .probeInterval: "Interval",
+            .probeSize: "Size",
+            .probeExecutionMode: "Execution",
+            .probeAppOpenMode: "App Open",
+            .probeBackgroundMode: "Background",
+            .probeLatest: "Latest Result",
+            .probeHistory: "History",
+            .probeNoResults: "No probe results yet",
+            .probeRunning: "Running",
+            .probeEnableBackground: "Enable Background LaunchDaemon",
+            .probeApplyBackground: "Apply Background Probe",
+            .probeBackgroundHelp: "Background mode uses sudo LaunchDaemon and the same reviewed install workflow.",
+            .probeHealthy: "Healthy",
+            .probeDegraded: "Degraded",
+            .probeFailed: "Failed",
+            .probeUnknown: "No Data",
+            .probeDisabled: "Disabled",
             .cache: "Cache",
             .diskCache: "Disk Cache",
             .memoryCache: "Memory Cache",
@@ -363,6 +383,26 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .githubDevLaunchDaemonNote: "GitHub 版使用已审查的 sudo 脚本。当前配置参数会写入 root 拥有的 config/env 文件，然后重启对应的 LaunchDaemon。",
             .quota: "配额",
             .performanceTest: "性能测试",
+            .reliabilityProbe: "可靠性检测",
+            .probeTestNow: "立即测试",
+            .probeScheduled: "定时",
+            .probeInterval: "间隔",
+            .probeSize: "大小",
+            .probeExecutionMode: "执行",
+            .probeAppOpenMode: "应用内",
+            .probeBackgroundMode: "后台",
+            .probeLatest: "最近结果",
+            .probeHistory: "历史",
+            .probeNoResults: "暂无检测结果",
+            .probeRunning: "运行中",
+            .probeEnableBackground: "启用后台 LaunchDaemon",
+            .probeApplyBackground: "应用后台检测",
+            .probeBackgroundHelp: "后台模式使用 sudo LaunchDaemon 和相同的已审查安装流程。",
+            .probeHealthy: "健康",
+            .probeDegraded: "降级",
+            .probeFailed: "失败",
+            .probeUnknown: "无数据",
+            .probeDisabled: "已禁用",
             .cache: "缓存",
             .diskCache: "磁盘缓存",
             .memoryCache: "内存缓存",
@@ -499,6 +539,26 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .githubDevLaunchDaemonNote: "GitHub 版使用已審查的 sudo 腳本。目前設定參數會寫入 root 擁有的 config/env 檔案，然後重啟對應的 LaunchDaemon。",
             .quota: "配額",
             .performanceTest: "效能測試",
+            .reliabilityProbe: "可靠性檢測",
+            .probeTestNow: "立即測試",
+            .probeScheduled: "定時",
+            .probeInterval: "間隔",
+            .probeSize: "大小",
+            .probeExecutionMode: "執行",
+            .probeAppOpenMode: "應用內",
+            .probeBackgroundMode: "背景",
+            .probeLatest: "最近結果",
+            .probeHistory: "歷史",
+            .probeNoResults: "暫無檢測結果",
+            .probeRunning: "執行中",
+            .probeEnableBackground: "啟用背景 LaunchDaemon",
+            .probeApplyBackground: "套用背景檢測",
+            .probeBackgroundHelp: "背景模式使用 sudo LaunchDaemon 和相同的已審查安裝流程。",
+            .probeHealthy: "健康",
+            .probeDegraded: "降級",
+            .probeFailed: "失敗",
+            .probeUnknown: "無資料",
+            .probeDisabled: "已停用",
             .cache: "快取",
             .diskCache: "磁碟快取",
             .memoryCache: "記憶體快取",
@@ -635,6 +695,26 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .githubDevLaunchDaemonNote: "GitHub ビルドではレビュー済みの sudo スクリプトを使います。現在のプロファイル設定を root 所有の config/env に書き込み、対応する LaunchDaemon を再起動します。",
             .quota: "クォータ",
             .performanceTest: "性能テスト",
+            .reliabilityProbe: "信頼性プローブ",
+            .probeTestNow: "今すぐテスト",
+            .probeScheduled: "定期実行",
+            .probeInterval: "間隔",
+            .probeSize: "サイズ",
+            .probeExecutionMode: "実行",
+            .probeAppOpenMode: "アプリ内",
+            .probeBackgroundMode: "バックグラウンド",
+            .probeLatest: "最新結果",
+            .probeHistory: "履歴",
+            .probeNoResults: "プローブ結果はまだありません",
+            .probeRunning: "実行中",
+            .probeEnableBackground: "バックグラウンド LaunchDaemon を有効化",
+            .probeApplyBackground: "バックグラウンドプローブを適用",
+            .probeBackgroundHelp: "バックグラウンドモードは sudo LaunchDaemon と同じレビュー済みインストール経路を使います。",
+            .probeHealthy: "正常",
+            .probeDegraded: "低下",
+            .probeFailed: "失敗",
+            .probeUnknown: "データなし",
+            .probeDisabled: "無効",
             .cache: "キャッシュ",
             .diskCache: "ディスクキャッシュ",
             .memoryCache: "メモリキャッシュ",
@@ -771,6 +851,26 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .githubDevLaunchDaemonNote: "GitHub 빌드는 검토된 sudo 스크립트를 사용합니다. 현재 프로필 매개변수를 root 소유 config/env 파일에 쓴 뒤 해당 LaunchDaemon을 재시작합니다.",
             .quota: "할당량",
             .performanceTest: "성능 테스트",
+            .reliabilityProbe: "안정성 검사",
+            .probeTestNow: "지금 테스트",
+            .probeScheduled: "예약",
+            .probeInterval: "간격",
+            .probeSize: "크기",
+            .probeExecutionMode: "실행",
+            .probeAppOpenMode: "앱 열림",
+            .probeBackgroundMode: "백그라운드",
+            .probeLatest: "최근 결과",
+            .probeHistory: "기록",
+            .probeNoResults: "아직 검사 결과 없음",
+            .probeRunning: "실행 중",
+            .probeEnableBackground: "백그라운드 LaunchDaemon 활성화",
+            .probeApplyBackground: "백그라운드 검사 적용",
+            .probeBackgroundHelp: "백그라운드 모드는 sudo LaunchDaemon과 동일한 검토된 설치 흐름을 사용합니다.",
+            .probeHealthy: "정상",
+            .probeDegraded: "저하",
+            .probeFailed: "실패",
+            .probeUnknown: "데이터 없음",
+            .probeDisabled: "비활성화됨",
             .cache: "캐시",
             .diskCache: "디스크 캐시",
             .memoryCache: "메모리 캐시",
@@ -910,6 +1010,26 @@ enum AppTextKey: String, CaseIterable {
     case githubDevLaunchDaemonNote
     case quota
     case performanceTest
+    case reliabilityProbe
+    case probeTestNow
+    case probeScheduled
+    case probeInterval
+    case probeSize
+    case probeExecutionMode
+    case probeAppOpenMode
+    case probeBackgroundMode
+    case probeLatest
+    case probeHistory
+    case probeNoResults
+    case probeRunning
+    case probeEnableBackground
+    case probeApplyBackground
+    case probeBackgroundHelp
+    case probeHealthy
+    case probeDegraded
+    case probeFailed
+    case probeUnknown
+    case probeDisabled
     case cache
     case diskCache
     case memoryCache

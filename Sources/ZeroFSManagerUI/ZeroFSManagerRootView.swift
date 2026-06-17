@@ -17,7 +17,12 @@ public struct ZeroFSManagerRootView: View {
             List(selection: $model.selectedProfileID) {
                 Section {
                     ForEach(model.profiles) { profile in
-                        MountRow(profile: profile, language: language)
+                        MountRow(
+                            profile: profile,
+                            reliability: model.reliabilityClassification(for: profile.id),
+                            isProbeRunning: model.isReliabilityProbeRunning(profile.id),
+                            language: language
+                        )
                             .tag(profile.id)
                     }
                 } header: {
@@ -147,6 +152,8 @@ private struct EmptyMountSelectionView: View {
 
 private struct MountRow: View {
     var profile: EditableMountProfile
+    var reliability: ReliabilityClassification
+    var isProbeRunning: Bool
     var language: AppLanguage
 
     var body: some View {
@@ -174,12 +181,31 @@ private struct MountRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 6)
+            ProbeReliabilityIcon(
+                classification: reliability,
+                isRunning: isProbeRunning,
+                language: language
+            )
             Image(systemName: profile.autoMount == .afterLogin ? "bolt.circle.fill" : "circle")
                 .font(.caption)
                 .foregroundStyle(profile.autoMount == .afterLogin ? Color.yellow : Color.secondary.opacity(0.45))
                 .help(profile.autoMount == .afterLogin ? language.text(.autoMountAfterLoginHelp) : language.text(.autoMountOffHelp))
         }
         .padding(.vertical, 5)
+    }
+}
+
+private struct ProbeReliabilityIcon: View {
+    var classification: ReliabilityClassification
+    var isRunning: Bool
+    var language: AppLanguage
+
+    var body: some View {
+        Image(systemName: isRunning ? "arrow.triangle.2.circlepath.circle.fill" : classification.symbolName)
+            .font(.caption)
+            .foregroundStyle(isRunning ? Color.accentColor : classification.color)
+            .help(isRunning ? language.text(.probeRunning) : classification.title(language: language))
+            .accessibilityLabel(isRunning ? language.text(.probeRunning) : classification.title(language: language))
     }
 }
 
@@ -269,6 +295,10 @@ private struct ProfileDetailView: View {
                                 .monospacedDigit()
                         }
                     }
+                }
+
+                Section(language.text(.reliabilityProbe)) {
+                    ReliabilityProbeSection(profile: $profile, model: model, language: language)
                 }
 
                 Section(language.text(.cache)) {
@@ -413,6 +443,125 @@ private struct ZeroFSDependencyView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct ReliabilityProbeSection: View {
+    @Binding var profile: EditableMountProfile
+    @ObservedObject var model: ZeroFSManagerViewModel
+    var language: AppLanguage
+
+    private var settings: ProbeSettings {
+        model.probeSettings(for: profile.id)
+    }
+
+    private var latest: ProbeResult? {
+        model.latestProbeResult(for: profile.id)
+    }
+
+    private var history: [ProbeResult] {
+        Array(model.probeResults(for: profile.id).prefix(5))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Toggle(language.text(.probeScheduled), isOn: Binding(
+                    get: { settings.enabled },
+                    set: { model.setProbeSchedule(profile.id, enabled: $0) }
+                ))
+                Spacer()
+                Button {
+                    Task { await model.runReliabilityProbe(profile.id, trigger: .manual) }
+                } label: {
+                    Label(language.text(.probeTestNow), systemImage: "network")
+                }
+                .disabled(model.isReliabilityProbeRunning(profile.id))
+            }
+
+            Picker(language.text(.probeInterval), selection: Binding(
+                get: { settings.intervalSeconds },
+                set: { model.setProbeInterval(profile.id, seconds: $0) }
+            )) {
+                Text("15 min").tag(900)
+                Text("30 min").tag(1_800)
+                Text("60 min").tag(3_600)
+                Text("120 min").tag(7_200)
+            }
+            .pickerStyle(.segmented)
+            .disabled(!settings.enabled)
+
+            Picker(language.text(.probeSize), selection: Binding(
+                get: { settings.sizeBytes },
+                set: { model.setProbeSize(profile.id, bytes: $0) }
+            )) {
+                Text("1 MiB").tag(Int64(1 * 1_048_576))
+                Text("4 MiB").tag(Int64(4 * 1_048_576))
+                Text("8 MiB").tag(Int64(8 * 1_048_576))
+                Text("16 MiB").tag(Int64(16 * 1_048_576))
+            }
+            .pickerStyle(.segmented)
+
+            Picker(language.text(.probeExecutionMode), selection: Binding(
+                get: { settings.backgroundLaunchDaemonEnabled },
+                set: { model.setProbeBackgroundMode(profile.id, enabled: $0) }
+            )) {
+                Text(language.text(.probeAppOpenMode)).tag(false)
+                Text(language.text(.probeBackgroundMode)).tag(true)
+            }
+            .pickerStyle(.segmented)
+            .disabled(!settings.enabled)
+            .help(language.text(.probeBackgroundHelp))
+
+            if !model.distributionMode.allowsLoginAutoMount {
+                Button {
+                    Task { await model.installOrUpdateLaunchDaemon(profile.id) }
+                } label: {
+                    Label(language.text(.probeApplyBackground), systemImage: "arrow.triangle.2.circlepath")
+                }
+                .help(language.text(.probeBackgroundHelp))
+            }
+
+            LabeledContent(language.text(.probeLatest)) {
+                HStack(spacing: 8) {
+                    ProbeReliabilityIcon(
+                        classification: model.reliabilityClassification(for: profile.id),
+                        isRunning: model.isReliabilityProbeRunning(profile.id),
+                        language: language
+                    )
+                    Text(model.reliabilitySummary(for: profile.id, language: language))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            if history.isEmpty {
+                Text(language.text(.probeNoResults))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(language.text(.probeHistory))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(history) { result in
+                        HStack(spacing: 8) {
+                            ProbeReliabilityIcon(
+                                classification: ReliabilityClassifier.classification(settings: ProbeSettings(enabled: true), latestResult: result),
+                                isRunning: false,
+                                language: language
+                            )
+                            Text(result.startedAt.formatted(date: .abbreviated, time: .shortened))
+                            Spacer()
+                            Text(result.compactSummary)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.caption)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -817,10 +966,17 @@ final class ZeroFSManagerViewModel: ObservableObject {
     @Published var zeroFSBinary: ZeroFSBinary?
     @Published var endpointReachability: EndpointReachabilityState = .notChecked
     @Published var language: AppLanguage = .preferred()
+    @Published private var probeSettingsByProfile: [ProfileID: ProbeSettings] = [:]
+    @Published private var probeResultsByProfile: [ProfileID: [ProbeResult]] = [:]
+    @Published private var runningReliabilityProbeIDs: Set<ProfileID> = []
 
     private let helper: PrivilegedHelperClient
     private let secrets: SecretStore
     private let profileStore: FileMountProfileStore
+    private let probeSettingsStore: FileProbeSettingsStore
+    private let probeResultStore: FileProbeResultStore
+    private let backgroundProbeResultStore: FileProbeResultStore
+    private var probeSchedulerTask: Task<Void, Never>?
     let distributionMode: AppDistributionMode
     let currentTeamIdentifier: String?
 
@@ -828,12 +984,18 @@ final class ZeroFSManagerViewModel: ObservableObject {
         helper: PrivilegedHelperClient = XPCPrivilegedHelperClient(),
         secrets: SecretStore = KeychainSecretStore(),
         profileStore: FileMountProfileStore = .applicationSupport(),
+        probeSettingsStore: FileProbeSettingsStore = ZeroFSManagerViewModel.defaultProbeSettingsStore(),
+        probeResultStore: FileProbeResultStore = ZeroFSManagerViewModel.defaultProbeResultStore(),
+        backgroundProbeResultStore: FileProbeResultStore = ZeroFSManagerViewModel.defaultBackgroundProbeResultStore(),
         distributionMode: AppDistributionMode = .resolve(),
         currentTeamIdentifier: String? = CodeSigningHelperClientAuthorizer.currentProcessTeamIdentifier()
     ) {
         self.helper = helper
         self.secrets = secrets
         self.profileStore = profileStore
+        self.probeSettingsStore = probeSettingsStore
+        self.probeResultStore = probeResultStore
+        self.backgroundProbeResultStore = backgroundProbeResultStore
         self.distributionMode = distributionMode
         self.currentTeamIdentifier = currentTeamIdentifier
         let migrationKey = "com.zerofs.manager.didRequireExplicitAutoMountOptIn"
@@ -849,6 +1011,36 @@ final class ZeroFSManagerViewModel: ObservableObject {
         self.profiles = initialProfiles
         self.selectedProfileID = initialProfiles.first?.id
         self.zeroFSBinary = ZeroFSBinaryLocator().locate()
+        self.probeSettingsByProfile = (try? probeSettingsStore.load()) ?? [:]
+        self.probeResultsByProfile = initialProfiles.reduce(into: [:]) { result, profile in
+            result[profile.id] = loadMergedProbeResults(profileID: profile.id)
+        }
+    }
+
+    static func defaultProbeSettingsStore(fileManager: FileManager = .default) -> FileProbeSettingsStore {
+        FileProbeSettingsStore(
+            fileURL: userApplicationSupport(fileManager: fileManager)
+                .appendingPathComponent("probe-settings.json")
+        )
+    }
+
+    static func defaultProbeResultStore(fileManager: FileManager = .default) -> FileProbeResultStore {
+        FileProbeResultStore(
+            directoryURL: userApplicationSupport(fileManager: fileManager)
+                .appendingPathComponent("ProbeHistory", isDirectory: true)
+        )
+    }
+
+    static func defaultBackgroundProbeResultStore() -> FileProbeResultStore {
+        FileProbeResultStore(
+            directoryURL: URL(fileURLWithPath: "/Library/Application Support/ZeroFSManager/ProbeResults", isDirectory: true)
+        )
+    }
+
+    private static func userApplicationSupport(fileManager: FileManager) -> URL {
+        let baseDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+        return baseDirectory.appendingPathComponent("ZeroFSManager", isDirectory: true)
     }
 
     var selectedProfileBinding: Binding<EditableMountProfile>? {
@@ -875,8 +1067,11 @@ final class ZeroFSManagerViewModel: ObservableObject {
             return
         }
         profiles.append(next)
+        probeSettingsByProfile[next.id] = ProbeSettings()
+        probeResultsByProfile[next.id] = []
         selectedProfileID = next.id
         persistProfiles()
+        persistProbeSettings()
     }
 
     func chooseMountDirectory(for id: ProfileID) {
@@ -919,6 +1114,144 @@ final class ZeroFSManagerViewModel: ObservableObject {
 
     func validationIssues(for profile: EditableMountProfile) -> [ValidationIssue] {
         ProfileValidator.validate(profile.mountProfile)
+    }
+
+    func probeSettings(for id: ProfileID) -> ProbeSettings {
+        probeSettingsByProfile[id] ?? ProbeSettings()
+    }
+
+    func probeResults(for id: ProfileID) -> [ProbeResult] {
+        probeResultsByProfile[id] ?? []
+    }
+
+    func latestProbeResult(for id: ProfileID) -> ProbeResult? {
+        probeResults(for: id).first
+    }
+
+    func reliabilityClassification(for id: ProfileID) -> ReliabilityClassification {
+        ReliabilityClassifier.classification(settings: probeSettings(for: id), latestResult: latestProbeResult(for: id))
+    }
+
+    func isReliabilityProbeRunning(_ id: ProfileID) -> Bool {
+        runningReliabilityProbeIDs.contains(id)
+    }
+
+    func reliabilitySummary(for id: ProfileID, language: AppLanguage) -> String {
+        if isReliabilityProbeRunning(id) {
+            return language.text(.probeRunning)
+        }
+        guard let latest = latestProbeResult(for: id) else {
+            return reliabilityClassification(for: id).title(language: language)
+        }
+        if let failureReason = latest.failureReason, !failureReason.isEmpty {
+            return failureReason
+        }
+        return "\(latest.outcome.rawValue) · \(latest.compactSummary)"
+    }
+
+    func setProbeSchedule(_ id: ProfileID, enabled: Bool) {
+        updateProbeSettings(id) { settings in
+            settings.enabled = enabled
+            if !enabled {
+                settings.backgroundLaunchDaemonEnabled = false
+            }
+        }
+        startProbeScheduler()
+    }
+
+    func setProbeInterval(_ id: ProfileID, seconds: Int) {
+        updateProbeSettings(id) { settings in
+            settings.intervalSeconds = max(60, seconds)
+        }
+    }
+
+    func setProbeSize(_ id: ProfileID, bytes: Int64) {
+        updateProbeSettings(id) { settings in
+            settings.sizeBytes = min(max(1, bytes), ProbeDefaults.scheduledMaxSizeBytes)
+        }
+    }
+
+    func setProbeBackgroundMode(_ id: ProfileID, enabled: Bool) {
+        updateProbeSettings(id) { settings in
+            settings.backgroundLaunchDaemonEnabled = enabled
+            if enabled {
+                settings.enabled = true
+            }
+        }
+    }
+
+    func runReliabilityProbe(_ id: ProfileID, trigger: ProbeTrigger) async {
+        guard !runningReliabilityProbeIDs.contains(id),
+              let index = profiles.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let profile = profiles[index]
+        runningReliabilityProbeIDs.insert(id)
+        defer { runningReliabilityProbeIDs.remove(id) }
+
+        if trigger != .manual {
+            guard probeSettings(for: id).enabled else { return }
+            guard !probeSettings(for: id).backgroundLaunchDaemonEnabled else { return }
+        }
+
+        let probeLock: ProbeRunLockHandle?
+        do {
+            guard let lock = try ProbeRunLock(lockDirectory: Self.sharedProbeLockDirectory(for: id)).acquire() else {
+                if trigger == .manual {
+                    notifications.append(MountNotification(
+                        profileID: id,
+                        title: language.text(.reliabilityProbe),
+                        body: language.text(.probeRunning)
+                    ))
+                }
+                return
+            }
+            probeLock = lock
+        } catch {
+            if trigger == .manual {
+                notifications.append(MountNotification(
+                    profileID: id,
+                    title: language.text(.reliabilityProbe),
+                    body: String(describing: error)
+                ))
+            }
+            return
+        }
+        defer { probeLock?.release() }
+
+        let workDirectory = Self.userApplicationSupport(fileManager: .default)
+            .appendingPathComponent("ProbeWork/\(id.rawValue)", isDirectory: true)
+        let metricsProvider: any MetricsProvider
+        if (1...65_535).contains(profile.metricsPort),
+           let metricsURL = URL(string: "http://127.0.0.1:\(profile.metricsPort)/metrics") {
+            metricsProvider = PrometheusMetricsProvider(url: metricsURL)
+        } else {
+            metricsProvider = StaticMetricsProvider(metrics: language.text(.metricsUnavailableDev))
+        }
+        let runner = ReliabilityProbeRunner(
+            fileManager: .default,
+            helper: distributionMode.allowsAutomaticHelperRegistration
+                ? PrivilegedPerformanceHelper(helper: helper)
+                : LocalPerformanceHelper(),
+            metrics: metricsProvider,
+            byteGenerator: RepeatingByteGenerator(byte: 0x2A)
+        )
+        let result = await runner.run(
+            profileID: id,
+            mountDirectory: URL(fileURLWithPath: profile.mountPath, isDirectory: true),
+            workDirectory: workDirectory,
+            sizeBytes: min(probeSettings(for: id).sizeBytes, ProbeDefaults.manualMaxSizeBytesWithoutConfirmation),
+            trigger: trigger
+        )
+        appendProbeResult(result)
+        if let index = profiles.firstIndex(where: { $0.id == id }) {
+            profiles[index].lastError = reliabilitySummary(for: id, language: language)
+            if result.outcome == .failed {
+                profiles[index].status = .failed
+            } else if applyLocalMountState(for: id) {
+                profiles[index].status = .mounted
+            }
+        }
     }
 
     func toggleMount(_ id: ProfileID) async {
@@ -1024,6 +1357,8 @@ final class ZeroFSManagerViewModel: ObservableObject {
 
     func runStartupChecks() async {
         detectZeroFS()
+        refreshBackgroundProbeResults()
+        startProbeScheduler()
         if let selected = selectedProfileBinding?.wrappedValue {
             await checkEndpointReachability(for: selected)
             _ = applyLocalMountState(for: selected.id)
@@ -1032,6 +1367,92 @@ final class ZeroFSManagerViewModel: ObservableObject {
             return
         }
         await runLoginAutoMountIfNeeded()
+    }
+
+    private func startProbeScheduler() {
+        guard probeSchedulerTask == nil else { return }
+        probeSchedulerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.runDueScheduledProbes(now: Date())
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+            }
+        }
+    }
+
+    private func runDueScheduledProbes(now: Date) async {
+        refreshBackgroundProbeResults()
+        for profile in profiles {
+            let settings = probeSettings(for: profile.id)
+            guard settings.enabled, !settings.backgroundLaunchDaemonEnabled else { continue }
+            guard !runningReliabilityProbeIDs.contains(profile.id) else { continue }
+            if let latest = latestProbeResult(for: profile.id),
+               now.timeIntervalSince(latest.startedAt) < TimeInterval(settings.intervalSeconds) {
+                continue
+            }
+            guard applyLocalMountState(for: profile.id) else { continue }
+            await runReliabilityProbe(profile.id, trigger: .inAppSchedule)
+        }
+    }
+
+    private func updateProbeSettings(_ id: ProfileID, mutate: (inout ProbeSettings) -> Void) {
+        var settings = probeSettings(for: id)
+        mutate(&settings)
+        settings.intervalSeconds = max(60, settings.intervalSeconds)
+        settings.sizeBytes = min(max(1, settings.sizeBytes), ProbeDefaults.scheduledMaxSizeBytes)
+        probeSettingsByProfile[id] = settings
+        persistProbeSettings()
+    }
+
+    private func persistProbeSettings() {
+        do {
+            try probeSettingsStore.save(probeSettingsByProfile)
+        } catch {
+            notifications.append(MountNotification(
+                profileID: selectedProfileID ?? (try! ProfileID("new-profile")),
+                title: language.text(.profileSaveFailedTitle),
+                body: String(describing: error)
+            ))
+        }
+    }
+
+    private func appendProbeResult(_ result: ProbeResult) {
+        do {
+            try probeResultStore.append(result)
+        } catch {
+            notifications.append(MountNotification(
+                profileID: result.profileID,
+                title: language.text(.profileSaveFailedTitle),
+                body: String(describing: error)
+            ))
+        }
+        probeResultsByProfile[result.profileID] = loadMergedProbeResults(profileID: result.profileID)
+    }
+
+    private func refreshBackgroundProbeResults() {
+        for profile in profiles {
+            probeResultsByProfile[profile.id] = loadMergedProbeResults(profileID: profile.id)
+        }
+    }
+
+    private func loadMergedProbeResults(profileID: ProfileID) -> [ProbeResult] {
+        let local = (try? probeResultStore.load(profileID: profileID)) ?? []
+        let background = (try? backgroundProbeResultStore.load(profileID: profileID)) ?? []
+        let nestedBackground = (try? FileProbeResultStore(
+            directoryURL: backgroundProbeResultStore.directoryURL.appendingPathComponent(profileID.rawValue, isDirectory: true)
+        ).load(profileID: profileID)) ?? []
+        var seen = Set<UUID>()
+        return (local + background + nestedBackground)
+            .sorted { $0.startedAt > $1.startedAt }
+            .filter { result in
+                if seen.contains(result.id) { return false }
+                seen.insert(result.id)
+                return true
+            }
+    }
+
+    private static func sharedProbeLockDirectory(for id: ProfileID) -> URL {
+        URL(fileURLWithPath: "/tmp/zerofs-manager-probe-locks", isDirectory: true)
+            .appendingPathComponent("\(id.rawValue).lock", isDirectory: true)
     }
 
     private func runLoginAutoMountIfNeeded() async {
@@ -1465,6 +1886,9 @@ final class ZeroFSManagerViewModel: ObservableObject {
             .appendingPathComponent("ZeroFSManager/LaunchDaemonProfiles", isDirectory: true)
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         let envURL = baseDirectory.appendingPathComponent("\(profile.id.rawValue)-\(UUID().uuidString).env")
+        let probeSettings = probeSettings(for: profile.id)
+        let backgroundProbeEnabled = probeSettings.enabled && probeSettings.backgroundLaunchDaemonEnabled
+        let probeToolURL = backgroundProbeEnabled ? try bundledProbeToolURL() : nil
         let contents = """
         ZEROFS_PROFILE_ID=\(shellQuote(profile.id.rawValue))
         ZEROFS_DISPLAY_NAME=\(shellQuote(profile.displayName))
@@ -1483,10 +1907,29 @@ final class ZeroFSManagerViewModel: ObservableObject {
         S3_ACCESS_KEY=\(shellQuote(accessKey))
         S3_SECRET_KEY=\(shellQuote(secretKey))
         ZEROFS_PASSWORD=\(shellQuote(password))
+        ZEROFS_PROBE_ENABLED=\(backgroundProbeEnabled ? "1" : "0")
+        ZEROFS_PROBE_INTERVAL_SECONDS=\(probeSettings.intervalSeconds)
+        ZEROFS_PROBE_SIZE_BYTES=\(min(probeSettings.sizeBytes, ProbeDefaults.scheduledMaxSizeBytes))
+        ZEROFS_PROBE_TOOL=\(shellQuote(probeToolURL?.path ?? ""))
         """
         try contents.write(to: envURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: envURL.path)
         return envURL
+    }
+
+    private func bundledProbeToolURL() throws -> URL {
+        let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent()
+        let candidates = [
+            executableDirectory?.appendingPathComponent("ZeroFSProbeTool"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent(".build/debug/ZeroFSProbeTool"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent(".build/release/ZeroFSProbeTool")
+        ].compactMap { $0 }
+        guard let probeTool = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
+            throw DevModeManualTestError.scriptNotFound("ZeroFSProbeTool")
+        }
+        return probeTool
     }
 
     private func manualScriptURL(named scriptName: String) throws -> URL {
@@ -1980,6 +2423,59 @@ struct PerformanceConfirmation: Identifiable {
 
     var id: ProfileID {
         profileID
+    }
+}
+
+private extension ReliabilityClassification {
+    var color: Color {
+        switch self {
+        case .disabled, .unknown:
+            .secondary
+        case .healthy:
+            .green
+        case .degraded:
+            .yellow
+        case .failed:
+            .red
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .disabled:
+            "wifi.slash"
+        case .unknown:
+            "wifi.circle"
+        case .healthy:
+            "wifi.circle.fill"
+        case .degraded:
+            "wifi.exclamationmark"
+        case .failed:
+            "exclamationmark.triangle.fill"
+        }
+    }
+
+    func title(language: AppLanguage) -> String {
+        switch self {
+        case .disabled:
+            language.text(.probeDisabled)
+        case .unknown:
+            language.text(.probeUnknown)
+        case .healthy:
+            language.text(.probeHealthy)
+        case .degraded:
+            language.text(.probeDegraded)
+        case .failed:
+            language.text(.probeFailed)
+        }
+    }
+}
+
+private extension ProbeResult {
+    var compactSummary: String {
+        let write = String(format: "%.2fs", writeSeconds)
+        let read = String(format: "%.2fs", readSeconds)
+        return "\(Int(sizeBytes / 1_048_576)) MiB W \(write) R \(read)"
     }
 }
 

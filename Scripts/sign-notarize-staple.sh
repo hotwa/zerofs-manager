@@ -49,6 +49,10 @@ codesign --force --timestamp --options runtime --entitlements "$HELPER_ENTITLEME
 verify_code_signature "$APP_PATH/Contents/MacOS/ZeroFSPrivilegedHelper"
 verify_hardened_runtime "$APP_PATH/Contents/MacOS/ZeroFSPrivilegedHelper"
 codesign --force --timestamp --options runtime --entitlements "$APP_ENTITLEMENTS" --sign "$IDENTITY" \
+  "$APP_PATH/Contents/MacOS/ZeroFSProbeTool"
+verify_code_signature "$APP_PATH/Contents/MacOS/ZeroFSProbeTool"
+verify_hardened_runtime "$APP_PATH/Contents/MacOS/ZeroFSProbeTool"
+codesign --force --timestamp --options runtime --entitlements "$APP_ENTITLEMENTS" --sign "$IDENTITY" \
   "$APP_PATH/Contents/MacOS/ZeroFSManagerApp"
 verify_code_signature "$APP_PATH/Contents/MacOS/ZeroFSManagerApp"
 verify_hardened_runtime "$APP_PATH/Contents/MacOS/ZeroFSManagerApp"

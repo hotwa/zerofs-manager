@@ -13,6 +13,7 @@ The default mode is `github-dev`.
 - The app can save profiles, redact secrets, detect `zerofs`, check endpoint reachability, and guide manual real-mount tests.
 - Technical users can authorize `sudo` manually for the free GitHub build to install or remove launchd files, mount or unmount NFS, run ZeroFS, and perform read/write performance tests through reviewed scripts.
 - GitHub builds support per-profile sudo `LaunchDaemon` management. The app writes profile parameters to root-owned config/env files and restarts the matching daemon when the user clicks `Apply & Restart LaunchDaemon`.
+- Reliability probes are default-off. When enabled, the app writes a small temporary file through the mounted ZeroFS filesystem, reads it back, verifies SHA-256, records a sanitized result, and removes the temporary files.
 - `TeamIdentifier=not set`, `0 valid identities found`, `SMAppServiceErrorDomain Code=3`, and `security error -67056` do not block dev S3/ZeroFS CLI testing.
 
 ## ZeroFS Dependency
@@ -68,6 +69,14 @@ These paths are for lower-level development testing and are not equivalent to of
 For GitHub free distribution, these manual sudo paths are the intended way to enable privileged operations without Apple Developer ID. They still require users to approve macOS prompts and understand that Gatekeeper may warn on first launch.
 
 The persistent auto-mount path keeps plist files stable and stores all changing profile parameters in `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>/zerofs.toml` plus a root-only `zerofs.env`. During install/update, the reviewed sudo script copies the user-installed `zerofs` binary into the same root-owned profile runtime directory, and LaunchDaemon jobs execute that staged copy instead of a user-writable PATH entry. After changing endpoint, bucket, prefix, mount directory, ports, cache, quota, credentials, or the ZeroFS binary, use the in-app `Apply & Restart LaunchDaemon` action so launchd reloads the profile.
+
+## Reliability Probes
+
+The Reliability Probe tool is a low-traffic health check, not a capacity meter or full benchmark. It is disabled by default. If the user enables it, each run creates a hidden temporary file under `.zerofs-manager-probes/<profile-id>/`, reads it back, verifies checksum, captures compact diagnostics, and cleans up.
+
+App-open scheduling runs only while ZeroFS Manager is open. Background scheduling uses the sudo LaunchDaemon profile flow and writes sanitized results to `/Library/Application Support/ZeroFSManager/ProbeResults/<profile-id>/`.
+
+Probe traffic depends on the selected interval and size. Use the manual performance test for larger throughput measurements.
 
 ## Official Release
 

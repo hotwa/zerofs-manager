@@ -96,12 +96,15 @@ ensure_job_unloaded() {
 LABEL_PREFIX="com.zerofs.manager.profile.$PROFILE_ID"
 RUNTIME_LABEL="$LABEL_PREFIX.zerofs"
 MOUNT_LABEL="$LABEL_PREFIX.mount"
+PROBE_LABEL="$LABEL_PREFIX.probe"
 PROFILE_ROOT="/Library/Application Support/ZeroFSManager/Profiles/$PROFILE_ID"
+PROBE_RESULT_ROOT="/Library/Application Support/ZeroFSManager/ProbeResults/$PROFILE_ID"
 CACHE_DIR="/var/cache/zerofs-manager/$PROFILE_ID"
 LOG_ROOT="/Library/Logs/ZeroFSManager/$PROFILE_ID"
 ENV_PATH="$PROFILE_ROOT/zerofs.env"
 RUNTIME_PLIST="/Library/LaunchDaemons/$RUNTIME_LABEL.plist"
 MOUNT_PLIST="/Library/LaunchDaemons/$MOUNT_LABEL.plist"
+PROBE_PLIST="/Library/LaunchDaemons/$PROBE_LABEL.plist"
 
 if [[ -n "$MOUNT_POINT" ]] && ! is_safe_mount_point "$MOUNT_POINT"; then
   echo "Refusing unsafe mount point: $MOUNT_POINT" >&2
@@ -118,8 +121,10 @@ if [[ -z "$MOUNT_POINT" ]] && sudo test -e "$ENV_PATH"; then
   fi
 fi
 
+bootout_job "$PROBE_LABEL" "$PROBE_PLIST"
 bootout_job "$MOUNT_LABEL" "$MOUNT_PLIST"
 bootout_job "$RUNTIME_LABEL" "$RUNTIME_PLIST"
+ensure_job_unloaded "$PROBE_LABEL"
 ensure_job_unloaded "$MOUNT_LABEL"
 ensure_job_unloaded "$RUNTIME_LABEL"
 
@@ -133,7 +138,7 @@ if [[ -n "$MOUNT_POINT" ]] && /sbin/mount | /usr/bin/grep -Fq " on $MOUNT_POINT 
   sudo /sbin/umount "$MOUNT_POINT" >/dev/null 2>&1 || true
 fi
 
-sudo rm -f "$MOUNT_PLIST" "$RUNTIME_PLIST"
+sudo rm -f "$PROBE_PLIST" "$MOUNT_PLIST" "$RUNTIME_PLIST"
 
 if [[ "$KEEP_RUNTIME" != "1" ]]; then
   case "$PROFILE_ROOT" in
@@ -151,8 +156,14 @@ if [[ "$KEEP_RUNTIME" != "1" ]]; then
       sudo rm -rf "$LOG_ROOT"
       ;;
   esac
+  case "$PROBE_RESULT_ROOT" in
+    "/Library/Application Support/ZeroFSManager/ProbeResults/$PROFILE_ID")
+      sudo rm -rf "$PROBE_RESULT_ROOT"
+      ;;
+  esac
 fi
 
 echo "Removed:"
 echo "  $RUNTIME_LABEL"
 echo "  $MOUNT_LABEL"
+echo "  $PROBE_LABEL"

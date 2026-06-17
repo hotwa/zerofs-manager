@@ -34,8 +34,10 @@ GitHub-dev auto-mount uses root-owned profile config rather than rewriting plist
 Expected layout:
 
 - plist files: `/Library/LaunchDaemons/com.zerofs.manager.profile.<profile-id>.zerofs.plist` and `.mount.plist`
+- optional probe plist: `/Library/LaunchDaemons/com.zerofs.manager.profile.<profile-id>.probe.plist`
 - config: `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>/zerofs.toml`
 - secrets/env: `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>/zerofs.env`
+- sanitized probe results: `/Library/Application Support/ZeroFSManager/ProbeResults/<profile-id>/`
 - logs: `/Library/Logs/ZeroFSManager/<profile-id>/zerofs.log`
 
 After changing endpoint, bucket, prefix, mount directory, ports, cache, quota, or credentials, click `Apply & Restart LaunchDaemon` in the app or rerun:
@@ -160,5 +162,13 @@ Large tests require explicit confirmation:
 ```sh
 Scripts/manual-performance-test.sh --mount-point /Volumes/ZeroFS-Test --size 1024M --confirm-large-test
 ```
+
+## Reliability Probe Results
+
+Reliability probes are disabled until the user enables them. When enabled, each probe writes and removes a hidden temporary file under `.zerofs-manager-probes/<profile-id>/`, so it creates small network/object-storage traffic.
+
+If the icon is red, check whether the mount path is actually mounted, whether the local NFS export is still available, and whether hidden probe files were left behind. If background mode is enabled, re-run `Apply & Restart LaunchDaemon` after changing interval, size, mount point, ports, or ZeroFS binary path.
+
+Probe results are sanitized and do not contain S3 credentials. They are health samples, not object-store capacity readings.
 
 `manual-performance-test.sh` refuses mount points that do not look like local ZeroFS/NFS mounts unless `--allow-non-zerofs-mount` is provided. Only use that override for a scratch volume that can be safely modified and unmounted.

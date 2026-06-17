@@ -14,6 +14,7 @@ fail() {
 [[ -d "$APP_PATH" ]] || fail "missing app bundle: $APP_PATH"
 [[ -x "$APP_PATH/Contents/MacOS/ZeroFSManagerApp" ]] || fail "missing main executable"
 [[ -x "$APP_PATH/Contents/MacOS/ZeroFSPrivilegedHelper" ]] || fail "missing helper executable"
+[[ -x "$APP_PATH/Contents/MacOS/ZeroFSProbeTool" ]] || fail "missing background probe executable"
 [[ ! -e "$APP_PATH/Contents/Resources/zerofs/zerofs" ]] || fail "ZeroFS must not be embedded in the GUI bundle"
 [[ -f "$APP_PATH/Contents/Info.plist" ]] || fail "missing Info.plist"
 [[ -f "$APP_PATH/Contents/Resources/ZeroFSManager.icns" ]] || fail "missing app icon"

@@ -21,6 +21,7 @@ struct ZeroFSManagerChecks {
         try await checkHelperOperations(&checks)
         try await checkLoginAutoMount(&checks)
         try await checkPerformance(&checks)
+        try await checkReliabilityProbes(&checks)
         try checkPackaging(&checks)
         checks.finish()
     }
@@ -736,6 +737,176 @@ struct ZeroFSManagerChecks {
         }
     }
 
+    private static func checkReliabilityProbes(_ checks: inout CheckSuite) async throws {
+        let profileID = try ProfileID("example-profile")
+        let defaults = ProbeSettings()
+        checks.expect(!defaults.enabled, "reliability probes default to disabled")
+        checks.expect(defaults.intervalSeconds == 3_600, "reliability probe default interval is 60 minutes")
+        checks.expect(defaults.sizeBytes == 4 * 1_048_576, "reliability probe default size is 4 MiB")
+        checks.expect(ProbeDefaults.scheduledMaxSizeBytes == 16 * 1_048_576, "scheduled probe max size is 16 MiB")
+        checks.expect(ProbeDefaults.manualMaxSizeBytesWithoutConfirmation == 64 * 1_048_576, "manual probe max without confirmation is 64 MiB")
+
+        checks.expect(
+            ReliabilityClassifier.classification(settings: ProbeSettings(enabled: false), latestResult: nil) == .disabled,
+            "disabled reliability probes classify as gray"
+        )
+        checks.expect(
+            ReliabilityClassifier.classification(settings: ProbeSettings(enabled: true), latestResult: nil) == .unknown,
+            "enabled reliability probes without data classify as gray"
+        )
+
+        let now = Date()
+        let healthy = ProbeResult(
+            profileID: profileID,
+            trigger: .manual,
+            outcome: .success,
+            startedAt: now,
+            endedAt: now.addingTimeInterval(0.2),
+            sizeBytes: 1_048_576,
+            writeSeconds: 0.1,
+            readSeconds: 0.1,
+            checksumStatus: .pass,
+            remoteCleanup: .removed,
+            readbackCleanup: .removed,
+            dfBeforeWrite: nil,
+            dfAfterWrite: nil,
+            dfAfterCleanup: nil,
+            metricsSummary: "zerofs_used_bytes 0",
+            failureReason: nil
+        )
+        checks.expect(
+            ReliabilityClassifier.classification(settings: ProbeSettings(enabled: true), latestResult: healthy) == .healthy,
+            "successful checksum-clean probe classifies green"
+        )
+
+        var failed = healthy
+        failed.outcome = .failed
+        failed.failureReason = "Mount directory is not available"
+        checks.expect(
+            ReliabilityClassifier.classification(settings: ProbeSettings(enabled: true), latestResult: failed) == .failed,
+            "failed reliability probes classify red"
+        )
+
+        var degraded = healthy
+        degraded.writeSeconds = 80
+        checks.expect(
+            ReliabilityClassifier.classification(settings: ProbeSettings(enabled: true), latestResult: degraded) == .degraded,
+            "very slow reliability probes classify yellow"
+        )
+
+        let storeRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: storeRoot) }
+        let settingsStore = FileProbeSettingsStore(fileURL: storeRoot.appendingPathComponent("probe-settings.json"))
+        try settingsStore.save([profileID: ProbeSettings(enabled: true, intervalSeconds: 900, sizeBytes: 1_048_576)])
+        let loadedSettings = try settingsStore.load()
+        checks.expect(loadedSettings[profileID]?.intervalSeconds == 900, "probe settings are stored outside profiles.json")
+
+        let retention = ProbeResultRetention(maxRecordsPerProfile: 3, maxAgeSeconds: 60 * 60 * 24 * 30)
+        let resultStore = FileProbeResultStore(directoryURL: storeRoot.appendingPathComponent("ProbeResults"), retention: retention)
+        var old = healthy
+        old.startedAt = now.addingTimeInterval(-60 * 60 * 24 * 31)
+        old.endedAt = old.startedAt.addingTimeInterval(0.2)
+        var first = healthy
+        first.id = UUID()
+        first.startedAt = now.addingTimeInterval(-3)
+        var second = healthy
+        second.id = UUID()
+        second.startedAt = now.addingTimeInterval(-2)
+        var third = healthy
+        third.id = UUID()
+        third.startedAt = now.addingTimeInterval(-1)
+        var fourth = healthy
+        fourth.id = UUID()
+        fourth.startedAt = now
+        for result in [old, first, second, third, fourth] {
+            try resultStore.append(result)
+        }
+        let retained = try resultStore.load(profileID: profileID)
+        checks.expect(retained.count == 3, "probe result store prunes by age and count")
+        checks.expect(!retained.contains(where: { $0.startedAt == old.startedAt }), "probe result store drops expired records")
+        let serializedResults = try String(contentsOf: resultStore.fileURL(for: profileID), encoding: .utf8)
+        let fixtureAccessKey = "AKPROBESECRETSTRING0000"
+        let fixtureSecretKey = "probe-secret-fixture-with-entropy-1234567890"
+        checks.expect(!serializedResults.contains(fixtureAccessKey), "probe result history does not contain access keys")
+        checks.expect(!serializedResults.contains(fixtureSecretKey), "probe result history does not contain secret keys")
+
+        let backgroundStore = FileProbeResultStore(
+            directoryURL: storeRoot
+                .appendingPathComponent("ProbeResults", isDirectory: true)
+                .appendingPathComponent(profileID.rawValue, isDirectory: true)
+        )
+        try backgroundStore.append(healthy)
+        checks.expect(
+            FileManager.default.fileExists(atPath: backgroundStore.fileURL(for: profileID).path),
+            "background probe result store writes nested per-profile result files"
+        )
+
+        let lockDirectory = storeRoot.appendingPathComponent("probe.lock", isDirectory: true)
+        let lock = ProbeRunLock(lockDirectory: lockDirectory, staleAfterSeconds: 60)
+        let firstLock = try lock.acquire(processIdentifier: ProcessInfo.processInfo.processIdentifier)
+        checks.expect(firstLock != nil, "probe run lock can be acquired")
+        checks.expect(try lock.acquire(processIdentifier: ProcessInfo.processInfo.processIdentifier) == nil, "probe run lock blocks concurrent acquisition")
+        firstLock?.release()
+        let secondLock = try lock.acquire(processIdentifier: ProcessInfo.processInfo.processIdentifier)
+        checks.expect(secondLock != nil, "probe run lock releases cleanly")
+        secondLock?.release()
+        try? FileManager.default.removeItem(at: lockDirectory)
+        try FileManager.default.createDirectory(at: lockDirectory, withIntermediateDirectories: true)
+        let staleMetadata = #"{"pid":-1,"startedAt":"2000-01-01T00:00:00Z"}"#
+        try staleMetadata.write(to: lockDirectory.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
+        let staleRecoveredLock = try lock.acquire(processIdentifier: ProcessInfo.processInfo.processIdentifier)
+        checks.expect(staleRecoveredLock != nil, "probe run lock recovers stale lock directories")
+        staleRecoveredLock?.release()
+
+        let runnerRoot = storeRoot.appendingPathComponent("runner")
+        let mount = runnerRoot.appendingPathComponent("mount", isDirectory: true)
+        let work = runnerRoot.appendingPathComponent("work", isDirectory: true)
+        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
+        let mountedOutput = "127.0.0.1:/ on \(mount.path) (nfs, asynchronous, mounted by root)"
+        let probeRunner = ReliabilityProbeRunner(
+            fileManager: .default,
+            helper: MockPerformanceHelper(),
+            metrics: StaticMetricsProvider(metrics: "zerofs_used_bytes 0\n"),
+            diskUsage: StaticDiskUsageProvider(),
+            byteGenerator: RepeatingByteGenerator(byte: 0x2A),
+            mountTable: StaticMountTableProvider(mountOutput: mountedOutput),
+            settleAfterCleanupNanoseconds: 0
+        )
+        let probeResult = await probeRunner.run(
+            profileID: profileID,
+            mountDirectory: mount,
+            workDirectory: work,
+            sizeBytes: 4_096,
+            trigger: .manual
+        )
+        checks.expect(probeResult.outcome == .success, "reliability probe succeeds on a mounted local NFS path")
+        checks.expect(probeResult.checksumStatus == .pass, "reliability probe verifies readback checksum")
+        checks.expect(probeResult.remoteCleanup == .removed, "reliability probe removes remote hidden temp file")
+        checks.expect(probeResult.readbackCleanup == .removed, "reliability probe removes local readback temp file")
+        let hiddenProbeRoot = mount.appendingPathComponent(".zerofs-manager-probes", isDirectory: true)
+        let hiddenLeftovers = (try? FileManager.default.contentsOfDirectory(atPath: hiddenProbeRoot.path)) ?? []
+        checks.expect(hiddenLeftovers.isEmpty, "reliability probe cleanup removes hidden probe files")
+
+        let unmountedRunner = ReliabilityProbeRunner(
+            fileManager: .default,
+            helper: MockPerformanceHelper(),
+            metrics: StaticMetricsProvider(metrics: ""),
+            diskUsage: StaticDiskUsageProvider(),
+            byteGenerator: RepeatingByteGenerator(byte: 0x2A),
+            mountTable: StaticMountTableProvider(mountOutput: ""),
+            settleAfterCleanupNanoseconds: 0
+        )
+        let unmountedResult = await unmountedRunner.run(
+            profileID: profileID,
+            mountDirectory: mount,
+            workDirectory: work,
+            sizeBytes: 4_096,
+            trigger: .manual
+        )
+        checks.expect(unmountedResult.outcome == .failed, "manual reliability probe records unmounted paths as failures")
+        checks.expect(unmountedResult.failureReason?.contains("mounted") == true, "unmounted probe failure gives a concise reason")
+    }
+
     private static func checkPackaging(_ checks: inout CheckSuite) throws {
         let layout = AppBundleLayout()
         checks.expect(layout.appBundleName == "ZeroFS Manager.app", "packaging layout uses app bundle name")
@@ -765,12 +936,26 @@ struct ZeroFSManagerChecks {
         let buildAppScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/build-app.sh"), encoding: .utf8)
         checks.expect(buildAppScript.contains("codesign --force --deep --sign -"), "local app build ad-hoc signs the complete bundle")
         checks.expect(buildAppScript.contains("Contents/Resources/Scripts"), "app bundle includes dev helper scripts as resources")
+        checks.expect(buildAppScript.contains("ZeroFSProbeTool"), "app bundle includes the background probe executable")
         checks.expect(buildAppScript.contains("manual-install-profile-launchdaemon.sh"), "app bundle includes sudo profile launchd installer")
         checks.expect(buildAppScript.contains("manual-uninstall-profile-launchdaemon.sh"), "app bundle includes sudo profile launchd uninstaller")
         checks.expect(buildAppScript.contains("Contents/Resources/LICENSE.txt"), "app bundle includes Apache license text")
+        let packageSource = try String(contentsOf: projectRoot.appendingPathComponent("Package.swift"), encoding: .utf8)
+        checks.expect(packageSource.contains(".executable(name: \"ZeroFSProbeTool\""), "Swift package exposes ZeroFSProbeTool executable product")
+        checks.expect(packageSource.contains("name: \"ZeroFSProbeTool\""), "Swift package builds ZeroFSProbeTool target")
         let rootViewSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSManagerUI/ZeroFSManagerRootView.swift"), encoding: .utf8)
         checks.expect(rootViewSource.contains("--env /path/to/.env.local --delete-env-on-exit"), "copy CLI command uses a safe env template instead of writing secrets")
         checks.expect(rootViewSource.contains("LocalPerformanceHelper"), "GitHub-style dev performance tests can run against an existing local mount without helper registration")
+        checks.expect(rootViewSource.contains("ReliabilityProbeSection"), "UI includes reliability probe controls")
+        checks.expect(rootViewSource.contains("ProbeReliabilityIcon"), "mount list shows reliability health icons")
+        checks.expect(rootViewSource.contains("runReliabilityProbe"), "UI can trigger a manual reliability probe")
+        checks.expect(rootViewSource.contains("startProbeScheduler"), "app-open scheduler starts enabled reliability probes")
+        checks.expect(rootViewSource.contains("refreshBackgroundProbeResults"), "UI reads sanitized background probe results")
+        checks.expect(rootViewSource.contains("backgroundProbeResultStore.directoryURL.appendingPathComponent(profileID.rawValue"), "UI reads nested per-profile background probe results")
+        checks.expect(rootViewSource.contains("guard applyLocalMountState(for: profile.id) else { continue }"), "app-open scheduler skips unavailable mounts")
+        checks.expect(rootViewSource.contains("ProbeRunLock(lockDirectory: Self.sharedProbeLockDirectory"), "UI probes share the background probe lock")
+        checks.expect(rootViewSource.contains("(1...65_535).contains(profile.metricsPort)"), "reliability probe avoids invalid metrics URL crashes")
+        checks.expect(rootViewSource.contains("ZEROFS_PROBE_TOOL"), "sudo env flow stages the bundled probe tool")
         checks.expect(rootViewSource.contains("installOrUpdateLaunchDaemon"), "GitHub-style dev UI can install or update sudo LaunchDaemons")
         checks.expect(rootViewSource.contains("uninstallLaunchDaemon"), "GitHub-style dev UI can remove sudo LaunchDaemons")
         checks.expect(rootViewSource.contains("PrivilegedMountPathPolicy"), "GitHub-style dev sudo LaunchDaemon path enforces privileged mount path policy")
@@ -802,6 +987,11 @@ struct ZeroFSManagerChecks {
         checks.expect(localizationSource.contains("適用して LaunchDaemon を再起動"), "localization includes Japanese sudo launchd copy")
         checks.expect(localizationSource.contains("GitHub 스타일 개발 빌드"), "localization includes Korean GitHub distribution copy")
         checks.expect(localizationSource.contains("적용 후 LaunchDaemon 재시작"), "localization includes Korean sudo launchd copy")
+        checks.expect(localizationSource.contains("Reliability Probe"), "localization includes English reliability probe copy")
+        checks.expect(localizationSource.contains("可靠性检测"), "localization includes Simplified Chinese reliability probe copy")
+        checks.expect(localizationSource.contains("可靠性檢測"), "localization includes Traditional Chinese reliability probe copy")
+        checks.expect(localizationSource.contains("信頼性プローブ"), "localization includes Japanese reliability probe copy")
+        checks.expect(localizationSource.contains("안정성 검사"), "localization includes Korean reliability probe copy")
         let verifyBundleScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/verify-bundle.sh"), encoding: .utf8)
         checks.expect(verifyBundleScript.contains("codesign --verify --deep --strict"), "bundle verification enforces strict codesign")
         let requiredDevScripts = [
@@ -851,6 +1041,17 @@ struct ZeroFSManagerChecks {
         checks.expect(profileInstallScript.contains("launchctl bootout \"system/$label\""), "profile launchd installer falls back to label-based bootout")
         checks.expect(profileInstallScript.contains("RunAtLoad"), "profile launchd installer enables startup behavior")
         checks.expect(profileInstallScript.contains("StartInterval"), "profile launchd mount job retries mount readiness")
+        checks.expect(profileInstallScript.contains("ZEROFS_PROBE_ENABLED"), "profile launchd installer accepts probe enablement config")
+        checks.expect(profileInstallScript.contains("ZEROFS_PROBE_INTERVAL_SECONDS"), "profile launchd installer accepts probe interval config")
+        checks.expect(profileInstallScript.contains("ZEROFS_PROBE_SIZE_BYTES"), "profile launchd installer accepts probe size config")
+        checks.expect(profileInstallScript.contains("ZEROFS_PROBE_TOOL"), "profile launchd installer stages the bundled probe tool")
+        checks.expect(profileInstallScript.contains("PROBE_RESULT_ROOT"), "profile launchd installer writes sanitized probe results outside secret runtime")
+        checks.expect(profileInstallScript.contains("PROBE_LOCK_ROOT"), "profile launchd installer uses a shared probe lock root")
+        checks.expect(profileInstallScript.contains(".probe"), "profile launchd installer manages a probe LaunchDaemon")
+        checks.expect(profileInstallScript.contains("probe-zerofs.sh"), "profile launchd installer generates a root-owned probe wrapper")
+        checks.expect(profileInstallScript.contains("source $(shell_quote \"$ENV_PATH\")"), "probe wrapper sources root-only env before running ZeroFSProbeTool")
+        checks.expect(profileInstallScript.contains("Skipping probe because mount is not ready"), "probe wrapper waits for mount readiness before writing")
+        checks.expect(profileInstallScript.contains("chmod 1777 \"$PROBE_LOCK_ROOT\""), "probe lock root is shared between GUI and root daemon")
         let profileUninstallScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-uninstall-profile-launchdaemon.sh"), encoding: .utf8)
         checks.expect(profileUninstallScript.contains("launchctl bootout system"), "profile launchd uninstaller stops system LaunchDaemons")
         checks.expect(profileUninstallScript.contains("launchctl bootout \"system/$label\""), "profile launchd uninstaller falls back to label-based bootout")
@@ -858,8 +1059,11 @@ struct ZeroFSManagerChecks {
         checks.expect(profileUninstallScript.contains("is_trusted_root_env"), "profile launchd uninstaller only sources trusted root-owned existing env files")
         checks.expect(profileUninstallScript.contains("is_safe_mount_point"), "profile launchd uninstaller validates mount points before unmounting")
         checks.expect(profileUninstallScript.contains("^[a-z0-9][a-z0-9-]{0,62}$"), "profile launchd uninstaller uses app-compatible profile ids")
-        checks.expect(profileUninstallScript.contains("sudo rm -f \"$MOUNT_PLIST\" \"$RUNTIME_PLIST\""), "profile launchd uninstaller removes installed plists")
+        checks.expect(profileUninstallScript.contains("sudo rm -f \"$PROBE_PLIST\" \"$MOUNT_PLIST\" \"$RUNTIME_PLIST\""), "profile launchd uninstaller removes installed plists")
         checks.expect(profileUninstallScript.contains("--keep-runtime"), "profile launchd uninstaller can preserve runtime files for debugging")
+        checks.expect(profileUninstallScript.contains("PROBE_LABEL"), "profile launchd uninstaller stops probe LaunchDaemon")
+        checks.expect(profileUninstallScript.contains("PROBE_RESULT_ROOT"), "profile launchd uninstaller knows sanitized probe result storage")
+        checks.expect(profileUninstallScript.contains("KEEP_RUNTIME"), "profile launchd uninstaller preserves probe results when requested")
         let githubDevPackageScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/package-github-dev.sh"), encoding: .utf8)
         checks.expect(githubDevPackageScript.contains("--help"), "github-dev package script supports help without building")
         checks.expect(githubDevPackageScript.contains("VERIFY_CODESIGN=0"), "github-dev unsigned package mode bypasses strict bundle codesign only when requested")

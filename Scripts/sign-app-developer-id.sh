@@ -18,6 +18,8 @@ HELPER_ENTITLEMENTS="$PROJECT_ROOT/Resources/Entitlements/ZeroFSPrivilegedHelper
 codesign --force --timestamp --options runtime --entitlements "$HELPER_ENTITLEMENTS" --sign "$DEVELOPER_ID_APPLICATION" \
   "$APP_PATH/Contents/MacOS/ZeroFSPrivilegedHelper"
 codesign --force --timestamp --options runtime --entitlements "$APP_ENTITLEMENTS" --sign "$DEVELOPER_ID_APPLICATION" \
+  "$APP_PATH/Contents/MacOS/ZeroFSProbeTool"
+codesign --force --timestamp --options runtime --entitlements "$APP_ENTITLEMENTS" --sign "$DEVELOPER_ID_APPLICATION" \
   "$APP_PATH/Contents/MacOS/ZeroFSManagerApp"
 codesign --force --timestamp --options runtime --entitlements "$APP_ENTITLEMENTS" --sign "$DEVELOPER_ID_APPLICATION" \
   "$APP_PATH"

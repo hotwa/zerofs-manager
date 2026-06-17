@@ -128,6 +128,14 @@ Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id example-profile --
 
 The best-practice layout is a stable pair of plist files under `/Library/LaunchDaemons` plus dynamic profile config under `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>`. The runtime plist runs `run-zerofs.sh`; the mount plist runs `mount-zerofs.sh`. All user-adjustable values such as endpoint, bucket, prefix, mount directory, ports, cache, quota, and credentials are written to `zerofs.toml` and root-only `zerofs.env`. During install/update, the sudo script stages the user-installed `zerofs` binary into the root-owned profile runtime directory and LaunchDaemon jobs execute that fixed copy. After a profile parameter or the ZeroFS binary changes, the app opens Terminal for the sudo installer again, which rewrites config/env, bootouts existing jobs by plist path and label, bootstraps them, and kickstarts the matching profile.
 
+If background reliability probes are enabled, the same sudo installer also stages `ZeroFSProbeTool`, writes `probe-zerofs.sh`, and manages `com.zerofs.manager.profile.<profile-id>.probe`. Probe results are sanitized JSON under `/Library/Application Support/ZeroFSManager/ProbeResults/<profile-id>/`; secrets remain only in the root-only runtime env file.
+
+## Reliability Probe Testing
+
+Reliability probes are default-off. App-open scheduling runs only while the GUI is open and never queues missed runs after sleep. Background scheduling requires the sudo LaunchDaemon flow.
+
+Each probe writes a small hidden temporary file through the mounted ZeroFS filesystem, reads it back, verifies SHA-256, captures `df` and optional metrics, and removes the temporary files. This creates real object-storage/network traffic proportional to the configured size and interval. Green means small-file write/read/checksum succeeded; yellow indicates degraded or slow behavior; red indicates failure, checksum mismatch, cleanup failure, or missing mount. It does not report real provider-side remaining capacity.
+
 ## Manual Real Mount Testing
 
 Create a local env file:

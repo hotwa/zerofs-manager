@@ -7,7 +7,7 @@ public enum ChecksumStatus: String, Codable, Equatable, Sendable {
     case fail
 }
 
-public enum CleanupStatus: Equatable, Sendable {
+public enum CleanupStatus: Codable, Equatable, Sendable {
     case removed
     case notPresent
     case failed(String)
@@ -52,7 +52,7 @@ public enum DiskUsagePhase: String, Codable, Equatable, Sendable {
     case afterCleanup
 }
 
-public struct DiskUsageSnapshot: Equatable, Sendable {
+public struct DiskUsageSnapshot: Codable, Equatable, Sendable {
     public var phase: DiskUsagePhase
     public var path: String
     public var rawOutput: String

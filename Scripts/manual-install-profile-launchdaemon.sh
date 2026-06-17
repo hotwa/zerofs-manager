@@ -102,22 +102,65 @@ ZEROFS_DISK_CACHE_GB="${ZEROFS_DISK_CACHE_GB:-10}"
 ZEROFS_MEMORY_CACHE_GB="${ZEROFS_MEMORY_CACHE_GB:-0.5}"
 S3_REGION="${S3_REGION:-us-east-1}"
 S3_PREFIX="${S3_PREFIX:-}"
+ZEROFS_PROBE_ENABLED="${ZEROFS_PROBE_ENABLED:-0}"
+ZEROFS_PROBE_INTERVAL_SECONDS="${ZEROFS_PROBE_INTERVAL_SECONDS:-3600}"
+ZEROFS_PROBE_SIZE_BYTES="${ZEROFS_PROBE_SIZE_BYTES:-4194304}"
+ZEROFS_PROBE_TOOL="${ZEROFS_PROBE_TOOL:-}"
+
+case "$ZEROFS_PROBE_ENABLED" in
+  1|true|TRUE|yes|YES|on|ON)
+    ZEROFS_PROBE_ENABLED=1
+    ;;
+  *)
+    ZEROFS_PROBE_ENABLED=0
+    ;;
+esac
+
+[[ "$ZEROFS_PROBE_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || {
+  echo "Invalid ZEROFS_PROBE_INTERVAL_SECONDS: $ZEROFS_PROBE_INTERVAL_SECONDS" >&2
+  exit 2
+}
+[[ "$ZEROFS_PROBE_SIZE_BYTES" =~ ^[0-9]+$ ]] || {
+  echo "Invalid ZEROFS_PROBE_SIZE_BYTES: $ZEROFS_PROBE_SIZE_BYTES" >&2
+  exit 2
+}
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  (( ZEROFS_PROBE_INTERVAL_SECONDS >= 60 )) || {
+    echo "ZEROFS_PROBE_INTERVAL_SECONDS must be at least 60 seconds" >&2
+    exit 2
+  }
+  (( ZEROFS_PROBE_SIZE_BYTES > 0 && ZEROFS_PROBE_SIZE_BYTES <= 16777216 )) || {
+    echo "ZEROFS_PROBE_SIZE_BYTES must be between 1 byte and 16 MiB" >&2
+    exit 2
+  }
+  [[ -x "$ZEROFS_PROBE_TOOL" ]] || {
+    echo "ZEROFS_PROBE_TOOL is not executable: $ZEROFS_PROBE_TOOL" >&2
+    exit 2
+  }
+fi
 
 LABEL_PREFIX="com.zerofs.manager.profile.$ZEROFS_PROFILE_ID"
 RUNTIME_LABEL="$LABEL_PREFIX.zerofs"
 MOUNT_LABEL="$LABEL_PREFIX.mount"
+PROBE_LABEL="$LABEL_PREFIX.probe"
 PROFILE_ROOT="/Library/Application Support/ZeroFSManager/Profiles/$ZEROFS_PROFILE_ID"
+PROBE_RESULT_ROOT="/Library/Application Support/ZeroFSManager/ProbeResults/$ZEROFS_PROFILE_ID"
+PROBE_LOCK_ROOT="/tmp/zerofs-manager-probe-locks"
 LOG_ROOT="/Library/Logs/ZeroFSManager/$ZEROFS_PROFILE_ID"
 CACHE_DIR="${ZEROFS_CACHE_DIR:-/var/cache/zerofs-manager/$ZEROFS_PROFILE_ID}"
 CONFIG_PATH="$PROFILE_ROOT/zerofs.toml"
 ENV_PATH="$PROFILE_ROOT/zerofs.env"
 STAGED_ZEROFS_BIN="$PROFILE_ROOT/zerofs"
+STAGED_PROBE_TOOL="$PROFILE_ROOT/ZeroFSProbeTool"
 RUN_SCRIPT="$PROFILE_ROOT/run-zerofs.sh"
 MOUNT_SCRIPT="$PROFILE_ROOT/mount-zerofs.sh"
 FLUSH_SCRIPT="$PROFILE_ROOT/flush-zerofs.sh"
+PROBE_SCRIPT="$PROFILE_ROOT/probe-zerofs.sh"
 RUNTIME_PLIST="/Library/LaunchDaemons/$RUNTIME_LABEL.plist"
 MOUNT_PLIST="/Library/LaunchDaemons/$MOUNT_LABEL.plist"
+PROBE_PLIST="/Library/LaunchDaemons/$PROBE_LABEL.plist"
 LOG_PATH="$LOG_ROOT/zerofs.log"
+PROBE_LOG_PATH="$LOG_ROOT/probe.log"
 RPC_SOCKET="/var/run/zerofs-manager-$ZEROFS_PROFILE_ID.rpc.sock"
 
 shell_quote() {
@@ -226,8 +269,10 @@ if [[ -n "$OLD_MOUNT_POINT" ]] && ! is_safe_mount_point "$OLD_MOUNT_POINT"; then
   OLD_MOUNT_POINT=""
 fi
 
+bootout_job "$PROBE_LABEL" "$PROBE_PLIST"
 bootout_job "$MOUNT_LABEL" "$MOUNT_PLIST"
 bootout_job "$RUNTIME_LABEL" "$RUNTIME_PLIST"
+ensure_job_unloaded "$PROBE_LABEL"
 ensure_job_unloaded "$MOUNT_LABEL"
 ensure_job_unloaded "$RUNTIME_LABEL"
 
@@ -236,6 +281,11 @@ if [[ -n "$OLD_MOUNT_POINT" && "$OLD_MOUNT_POINT" != "$ZEROFS_MOUNT_POINT" ]]; t
     echo "Unmounting previous mount point: $OLD_MOUNT_POINT"
     sudo /sbin/umount "$OLD_MOUNT_POINT" >/dev/null 2>&1 || true
   fi
+fi
+
+MOUNT_POINT_ALREADY_MOUNTED=0
+if /sbin/mount | /usr/bin/grep -Fq " on $ZEROFS_MOUNT_POINT "; then
+  MOUNT_POINT_ALREADY_MOUNTED=1
 fi
 
 TMP_DIR="$(mktemp -d)"
@@ -289,6 +339,9 @@ ZEROFS_MOUNT_POINT=$(shell_quote "$ZEROFS_MOUNT_POINT")
 ZEROFS_NFS_PORT=$(shell_quote "$ZEROFS_NFS_PORT")
 ZEROFS_RPC_PORT=$(shell_quote "$ZEROFS_RPC_PORT")
 ZEROFS_METRICS_PORT=$(shell_quote "$ZEROFS_METRICS_PORT")
+ZEROFS_PROBE_ENABLED=$(shell_quote "$ZEROFS_PROBE_ENABLED")
+ZEROFS_PROBE_INTERVAL_SECONDS=$(shell_quote "$ZEROFS_PROBE_INTERVAL_SECONDS")
+ZEROFS_PROBE_SIZE_BYTES=$(shell_quote "$ZEROFS_PROBE_SIZE_BYTES")
 ENV
 
 cat > "$TMP_DIR/run-zerofs.sh" <<RUN
@@ -397,15 +450,98 @@ cat > "$TMP_DIR/mount.plist" <<PLIST
 </plist>
 PLIST
 
-plutil -lint "$TMP_DIR/runtime.plist" "$TMP_DIR/mount.plist"
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  cat > "$TMP_DIR/probe-zerofs.sh" <<PROBE
+#!/bin/zsh
+set -euo pipefail
+set -a
+source $(shell_quote "$ENV_PATH")
+set +a
+MOUNT_POINT=$(shell_quote "$ZEROFS_MOUNT_POINT")
+ready="false"
+for _ in {1..60}; do
+  if /sbin/mount | /usr/bin/grep -Fq " on \${MOUNT_POINT} "; then
+    ready="true"
+    break
+  fi
+  /bin/sleep 1
+done
+if [[ "\${ready}" != "true" ]]; then
+  echo "Skipping probe because mount is not ready: \${MOUNT_POINT}" >&2
+  exit 75
+fi
+exec $(shell_quote "$STAGED_PROBE_TOOL") \\
+  --profile-id $(shell_quote "$ZEROFS_PROFILE_ID") \\
+  --mount-point $(shell_quote "$ZEROFS_MOUNT_POINT") \\
+  --size-bytes $(shell_quote "$ZEROFS_PROBE_SIZE_BYTES") \\
+  --metrics-port $(shell_quote "$ZEROFS_METRICS_PORT") \\
+  --result-dir $(shell_quote "$PROBE_RESULT_ROOT") \\
+  --work-dir $(shell_quote "$PROFILE_ROOT/probe-work") \\
+  --zerofs-bin $(shell_quote "$STAGED_ZEROFS_BIN") \\
+  --config $(shell_quote "$CONFIG_PATH") \\
+  --lock-dir $(shell_quote "$PROBE_LOCK_ROOT/$ZEROFS_PROFILE_ID.lock") \\
+  --trigger backgroundLaunchDaemon
+PROBE
 
-sudo /bin/mkdir -p "$PROFILE_ROOT" "$LOG_ROOT" "$CACHE_DIR" "$ZEROFS_MOUNT_POINT"
+  cat > "$TMP_DIR/probe.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$PROBE_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$PROBE_SCRIPT</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>$ZEROFS_PROBE_INTERVAL_SECONDS</integer>
+  <key>StandardOutPath</key>
+  <string>$PROBE_LOG_PATH</string>
+  <key>StandardErrorPath</key>
+  <string>$PROBE_LOG_PATH</string>
+  <key>WorkingDirectory</key>
+  <string>/var/empty</string>
+</dict>
+</plist>
+PLIST
+fi
+
+PLISTS_TO_LINT=("$TMP_DIR/runtime.plist" "$TMP_DIR/mount.plist")
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  PLISTS_TO_LINT+=("$TMP_DIR/probe.plist")
+fi
+plutil -lint "${PLISTS_TO_LINT[@]}"
+
+sudo /bin/mkdir -p "$PROFILE_ROOT" "$LOG_ROOT" "$CACHE_DIR"
+if [[ "$MOUNT_POINT_ALREADY_MOUNTED" != "1" ]]; then
+  sudo /bin/mkdir -p "$ZEROFS_MOUNT_POINT"
+fi
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  sudo /bin/mkdir -p "$PROBE_RESULT_ROOT" "$PROBE_LOCK_ROOT"
+fi
 sudo /usr/sbin/chown root:wheel "$PROFILE_ROOT" "$LOG_ROOT" "$CACHE_DIR"
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  sudo /usr/sbin/chown root:wheel "$PROBE_RESULT_ROOT"
+fi
 sudo /bin/chmod 700 "$PROFILE_ROOT"
-sudo /bin/chmod 755 "$LOG_ROOT" "$CACHE_DIR" "$ZEROFS_MOUNT_POINT"
+sudo /bin/chmod 755 "$LOG_ROOT" "$CACHE_DIR"
+if [[ "$MOUNT_POINT_ALREADY_MOUNTED" != "1" ]]; then
+  sudo /bin/chmod 755 "$ZEROFS_MOUNT_POINT"
+fi
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  sudo /bin/chmod 755 "$PROBE_RESULT_ROOT"
+  sudo /bin/chmod 1777 "$PROBE_LOCK_ROOT"
+fi
 
 sudo /usr/bin/install -o root -g wheel -m 0755 "$ZEROFS_BIN" "$STAGED_ZEROFS_BIN"
 assert_root_owned_runtime_file "$STAGED_ZEROFS_BIN"
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  sudo /usr/bin/install -o root -g wheel -m 0755 "$ZEROFS_PROBE_TOOL" "$STAGED_PROBE_TOOL"
+  assert_root_owned_runtime_file "$STAGED_PROBE_TOOL"
+fi
 sudo /usr/bin/install -o root -g wheel -m 0644 "$TMP_DIR/zerofs.toml" "$CONFIG_PATH"
 sudo /usr/bin/install -o root -g wheel -m 0600 "$TMP_DIR/zerofs.env" "$ENV_PATH"
 sudo /usr/bin/install -o root -g wheel -m 0700 "$TMP_DIR/run-zerofs.sh" "$RUN_SCRIPT"
@@ -413,20 +549,44 @@ sudo /usr/bin/install -o root -g wheel -m 0700 "$TMP_DIR/mount-zerofs.sh" "$MOUN
 sudo /usr/bin/install -o root -g wheel -m 0700 "$TMP_DIR/flush-zerofs.sh" "$FLUSH_SCRIPT"
 sudo /usr/bin/install -o root -g wheel -m 0644 "$TMP_DIR/runtime.plist" "$RUNTIME_PLIST"
 sudo /usr/bin/install -o root -g wheel -m 0644 "$TMP_DIR/mount.plist" "$MOUNT_PLIST"
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  sudo /usr/bin/install -o root -g wheel -m 0700 "$TMP_DIR/probe-zerofs.sh" "$PROBE_SCRIPT"
+  sudo /usr/bin/install -o root -g wheel -m 0644 "$TMP_DIR/probe.plist" "$PROBE_PLIST"
+else
+  sudo rm -f "$PROBE_PLIST" "$PROBE_SCRIPT" "$STAGED_PROBE_TOOL"
+fi
 
 echo "Runtime config written to: $PROFILE_ROOT"
 echo "Secrets are stored in root-only env file: $ENV_PATH"
 echo "ZeroFS binary staged to root-owned runtime path: $STAGED_ZEROFS_BIN"
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  echo "Probe tool staged to root-owned runtime path: $STAGED_PROBE_TOOL"
+  echo "Probe results will be written to: $PROBE_RESULT_ROOT"
+fi
 echo "Bootstrapping LaunchDaemons..."
 
 sudo launchctl bootstrap system "$RUNTIME_PLIST"
 sudo launchctl bootstrap system "$MOUNT_PLIST"
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  sudo launchctl bootstrap system "$PROBE_PLIST"
+fi
 sudo launchctl enable "system/$RUNTIME_LABEL" >/dev/null 2>&1 || true
 sudo launchctl enable "system/$MOUNT_LABEL" >/dev/null 2>&1 || true
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  sudo launchctl enable "system/$PROBE_LABEL" >/dev/null 2>&1 || true
+fi
 sudo launchctl kickstart -k "system/$RUNTIME_LABEL"
 sudo launchctl kickstart -k "system/$MOUNT_LABEL" >/dev/null 2>&1 || true
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  sudo launchctl kickstart -k "system/$PROBE_LABEL" >/dev/null 2>&1 || true
+fi
 
 echo "Installed and restarted:"
 echo "  $RUNTIME_LABEL"
 echo "  $MOUNT_LABEL"
+if [[ "$ZEROFS_PROBE_ENABLED" == "1" ]]; then
+  echo "  $PROBE_LABEL"
+else
+  echo "  probe LaunchDaemon disabled"
+fi
 redact "Mount point: $ZEROFS_MOUNT_POINT"
