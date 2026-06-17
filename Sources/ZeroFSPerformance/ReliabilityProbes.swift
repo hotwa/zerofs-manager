@@ -11,28 +11,89 @@ public enum ProbeDefaults {
     public static let defaultSizeBytes: Int64 = 4 * 1_048_576
     public static let scheduledMaxSizeBytes: Int64 = 16 * 1_048_576
     public static let manualMaxSizeBytesWithoutConfirmation: Int64 = 64 * 1_048_576
+    public static let confirmedManualMaxSizeBytes: Int64 = 512 * 1_048_576
     public static let defaultRetentionCount = 500
     public static let defaultRetentionAgeSeconds: TimeInterval = 60 * 60 * 24 * 30
     public static let degradedThroughputBytesPerSecond: Double = 5 * 1_048_576
     public static let degradedOperationSeconds: TimeInterval = 60
+    public static let historyBaselineSampleCount = 10
+    public static let minimumHistoryBaselineSamples = 3
 }
 
 public struct ProbeSettings: Codable, Equatable, Sendable {
     public var enabled: Bool
     public var intervalSeconds: Int
     public var sizeBytes: Int64
+    public var manualSizeBytes: Int64
     public var backgroundLaunchDaemonEnabled: Bool
+    public var lastScheduledProbeAt: Date?
+    public var lastManualProbeAt: Date?
 
     public init(
         enabled: Bool = false,
         intervalSeconds: Int = ProbeDefaults.defaultIntervalSeconds,
         sizeBytes: Int64 = ProbeDefaults.defaultSizeBytes,
-        backgroundLaunchDaemonEnabled: Bool = false
+        manualSizeBytes: Int64 = ProbeDefaults.defaultSizeBytes,
+        backgroundLaunchDaemonEnabled: Bool = false,
+        lastScheduledProbeAt: Date? = nil,
+        lastManualProbeAt: Date? = nil
     ) {
         self.enabled = enabled
         self.intervalSeconds = intervalSeconds
         self.sizeBytes = sizeBytes
+        self.manualSizeBytes = manualSizeBytes
         self.backgroundLaunchDaemonEnabled = backgroundLaunchDaemonEnabled
+        self.lastScheduledProbeAt = lastScheduledProbeAt
+        self.lastManualProbeAt = lastManualProbeAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case intervalSeconds
+        case sizeBytes
+        case manualSizeBytes
+        case backgroundLaunchDaemonEnabled
+        case lastScheduledProbeAt
+        case lastManualProbeAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        intervalSeconds = try container.decodeIfPresent(Int.self, forKey: .intervalSeconds) ?? ProbeDefaults.defaultIntervalSeconds
+        sizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes) ?? ProbeDefaults.defaultSizeBytes
+        manualSizeBytes = try container.decodeIfPresent(Int64.self, forKey: .manualSizeBytes) ?? sizeBytes
+        backgroundLaunchDaemonEnabled = try container.decodeIfPresent(Bool.self, forKey: .backgroundLaunchDaemonEnabled) ?? false
+        lastScheduledProbeAt = try container.decodeIfPresent(Date.self, forKey: .lastScheduledProbeAt)
+        lastManualProbeAt = try container.decodeIfPresent(Date.self, forKey: .lastManualProbeAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(intervalSeconds, forKey: .intervalSeconds)
+        try container.encode(sizeBytes, forKey: .sizeBytes)
+        try container.encode(manualSizeBytes, forKey: .manualSizeBytes)
+        try container.encode(backgroundLaunchDaemonEnabled, forKey: .backgroundLaunchDaemonEnabled)
+        try container.encodeIfPresent(lastScheduledProbeAt, forKey: .lastScheduledProbeAt)
+        try container.encodeIfPresent(lastManualProbeAt, forKey: .lastManualProbeAt)
+    }
+}
+
+public enum ProbeSizePolicy {
+    public static func resolvedScheduledSize(requestedBytes: Int64) -> Int64 {
+        min(max(1, requestedBytes), ProbeDefaults.scheduledMaxSizeBytes)
+    }
+
+    public static func resolvedManualSize(requestedBytes: Int64, confirmedLarge: Bool) -> Int64 {
+        let upperBound = confirmedLarge
+            ? ProbeDefaults.confirmedManualMaxSizeBytes
+            : ProbeDefaults.manualMaxSizeBytesWithoutConfirmation
+        return min(max(1, requestedBytes), upperBound)
+    }
+
+    public static func requiresLargeManualConfirmation(sizeBytes: Int64) -> Bool {
+        sizeBytes > ProbeDefaults.manualMaxSizeBytesWithoutConfirmation
     }
 }
 
@@ -132,10 +193,33 @@ public struct ProbeResult: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct ProbeResultDiagnostics: Equatable, Sendable {
+    public var writeMiBPerSecond: Double?
+    public var readMiBPerSecond: Double?
+    public var durationSeconds: TimeInterval
+    public var cleanupSummary: String
+    public var failureReason: String?
+
+    public init(
+        writeMiBPerSecond: Double?,
+        readMiBPerSecond: Double?,
+        durationSeconds: TimeInterval,
+        cleanupSummary: String,
+        failureReason: String?
+    ) {
+        self.writeMiBPerSecond = writeMiBPerSecond
+        self.readMiBPerSecond = readMiBPerSecond
+        self.durationSeconds = durationSeconds
+        self.cleanupSummary = cleanupSummary
+        self.failureReason = failureReason
+    }
+}
+
 public enum ReliabilityClassifier {
     public static func classification(
         settings: ProbeSettings,
-        latestResult: ProbeResult?
+        latestResult: ProbeResult?,
+        history: [ProbeResult] = []
     ) -> ReliabilityClassification {
         guard settings.enabled else { return .disabled }
         guard let latestResult else { return .unknown }
@@ -156,7 +240,52 @@ public enum ReliabilityClassifier {
             return .degraded
         }
 
+        if latestResult.outcome == .success,
+           isDegradedComparedWithHistory(latestResult, history: history) {
+            return .degraded
+        }
+
         return .healthy
+    }
+
+    private static func isDegradedComparedWithHistory(_ latest: ProbeResult, history: [ProbeResult]) -> Bool {
+        guard let latestWrite = latest.writeBytesPerSecond,
+              let latestRead = latest.readBytesPerSecond else {
+            return false
+        }
+        let baseline = history
+            .filter { result in
+                result.id != latest.id &&
+                    result.profileID == latest.profileID &&
+                    result.outcome == .success &&
+                    result.checksumStatus == .pass &&
+                    !result.remoteCleanup.isFailure &&
+                    !result.readbackCleanup.isFailure
+            }
+            .sorted { $0.startedAt > $1.startedAt }
+            .prefix(ProbeDefaults.historyBaselineSampleCount)
+        guard baseline.count >= ProbeDefaults.minimumHistoryBaselineSamples else {
+            return false
+        }
+        let writeValues = baseline.compactMap(\.writeBytesPerSecond)
+        let readValues = baseline.compactMap(\.readBytesPerSecond)
+        guard writeValues.count >= ProbeDefaults.minimumHistoryBaselineSamples,
+              readValues.count >= ProbeDefaults.minimumHistoryBaselineSamples,
+              let medianWrite = median(writeValues),
+              let medianRead = median(readValues) else {
+            return false
+        }
+        return latestWrite < medianWrite * 0.5 || latestRead < medianRead * 0.5
+    }
+
+    private static func median(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let middle = sorted.count / 2
+        if sorted.count.isMultiple(of: 2) {
+            return (sorted[middle - 1] + sorted[middle]) / 2
+        }
+        return sorted[middle]
     }
 }
 
@@ -855,9 +984,30 @@ public extension ProbeResult {
             failureReason: failureReason.map { ProbeResultSanitizer.sanitize($0, redactingSecrets: redactingSecrets) }
         )
     }
+
+    var diagnostics: ProbeResultDiagnostics {
+        ProbeResultDiagnostics(
+            writeMiBPerSecond: writeBytesPerSecond.map { $0 / 1_048_576 },
+            readMiBPerSecond: readBytesPerSecond.map { $0 / 1_048_576 },
+            durationSeconds: durationSeconds,
+            cleanupSummary: "remote \(remoteCleanup.diagnosticLabel), readback \(readbackCleanup.diagnosticLabel)",
+            failureReason: failureReason
+        )
+    }
 }
 
 private extension CleanupStatus {
+    var diagnosticLabel: String {
+        switch self {
+        case .removed:
+            return "removed"
+        case .notPresent:
+            return "not present"
+        case .failed:
+            return "failed"
+        }
+    }
+
     func sanitizedForStorage(redactingSecrets: [String] = []) -> CleanupStatus {
         switch self {
         case .removed, .notPresent:

@@ -91,6 +91,21 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
+    func runLargeProbeMessage(sizeMegabytes: Int) -> String {
+        switch self {
+        case .english:
+            "This writes and reads a temporary \(sizeMegabytes) MiB probe file through the mounted object-storage filesystem, then removes it. It creates real network and object-storage traffic."
+        case .simplifiedChinese:
+            "这会通过已挂载的对象存储文件系统写入并读取一个临时 \(sizeMegabytes) MiB 检测文件，然后删除它。它会产生真实网络和对象存储流量。"
+        case .traditionalChinese:
+            "這會透過已掛載的物件儲存檔案系統寫入並讀取一個臨時 \(sizeMegabytes) MiB 檢測檔案，然後刪除它。它會產生真實網路和物件儲存流量。"
+        case .japanese:
+            "マウント済みオブジェクトストレージのファイルシステム経由で一時的な \(sizeMegabytes) MiB のプローブファイルを書き込み・読み取り、その後削除します。実際のネットワークとオブジェクトストレージのトラフィックが発生します。"
+        case .korean:
+            "마운트된 오브젝트 스토리지 파일 시스템을 통해 임시 \(sizeMegabytes) MiB 검사 파일을 쓰고 읽은 뒤 삭제합니다. 실제 네트워크와 오브젝트 스토리지 트래픽이 발생합니다."
+        }
+    }
+
     func appleTeamIdentifier(_ value: String?) -> String {
         if let value, !value.isEmpty {
             return switch self {
@@ -232,11 +247,19 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .probeScheduled: "Scheduled",
             .probeInterval: "Interval",
             .probeSize: "Size",
+            .probeScheduledSize: "Scheduled Size",
+            .probeManualSize: "Manual Size",
+            .probeAdvancedManualSize: "Manual probes above 64 MiB require confirmation before network traffic starts.",
+            .runLargeProbeTitle: "Run Large Probe?",
             .probeExecutionMode: "Execution",
             .probeAppOpenMode: "App Open",
             .probeBackgroundMode: "Background",
             .probeLatest: "Latest Result",
             .probeHistory: "History",
+            .probeWrite: "Write",
+            .probeRead: "Read",
+            .probeDuration: "Duration",
+            .probeCleanup: "Cleanup",
             .probeNoResults: "No probe results yet",
             .probeRunning: "Running",
             .probeEnableBackground: "Enable Background LaunchDaemon",
@@ -388,11 +411,19 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .probeScheduled: "定时",
             .probeInterval: "间隔",
             .probeSize: "大小",
+            .probeScheduledSize: "定时大小",
+            .probeManualSize: "手动大小",
+            .probeAdvancedManualSize: "超过 64 MiB 的手动检测会在产生网络流量前要求确认。",
+            .runLargeProbeTitle: "运行大尺寸检测？",
             .probeExecutionMode: "执行",
             .probeAppOpenMode: "应用内",
             .probeBackgroundMode: "后台",
             .probeLatest: "最近结果",
             .probeHistory: "历史",
+            .probeWrite: "写入",
+            .probeRead: "读取",
+            .probeDuration: "耗时",
+            .probeCleanup: "清理",
             .probeNoResults: "暂无检测结果",
             .probeRunning: "运行中",
             .probeEnableBackground: "启用后台 LaunchDaemon",
@@ -544,11 +575,19 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .probeScheduled: "定時",
             .probeInterval: "間隔",
             .probeSize: "大小",
+            .probeScheduledSize: "定時大小",
+            .probeManualSize: "手動大小",
+            .probeAdvancedManualSize: "超過 64 MiB 的手動檢測會在產生網路流量前要求確認。",
+            .runLargeProbeTitle: "執行大尺寸檢測？",
             .probeExecutionMode: "執行",
             .probeAppOpenMode: "應用內",
             .probeBackgroundMode: "背景",
             .probeLatest: "最近結果",
             .probeHistory: "歷史",
+            .probeWrite: "寫入",
+            .probeRead: "讀取",
+            .probeDuration: "耗時",
+            .probeCleanup: "清理",
             .probeNoResults: "暫無檢測結果",
             .probeRunning: "執行中",
             .probeEnableBackground: "啟用背景 LaunchDaemon",
@@ -700,11 +739,19 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .probeScheduled: "定期実行",
             .probeInterval: "間隔",
             .probeSize: "サイズ",
+            .probeScheduledSize: "定期サイズ",
+            .probeManualSize: "手動サイズ",
+            .probeAdvancedManualSize: "64 MiB を超える手動プローブは、ネットワーク通信を開始する前に確認が必要です。",
+            .runLargeProbeTitle: "大きいプローブを実行しますか？",
             .probeExecutionMode: "実行",
             .probeAppOpenMode: "アプリ内",
             .probeBackgroundMode: "バックグラウンド",
             .probeLatest: "最新結果",
             .probeHistory: "履歴",
+            .probeWrite: "書き込み",
+            .probeRead: "読み取り",
+            .probeDuration: "時間",
+            .probeCleanup: "クリーンアップ",
             .probeNoResults: "プローブ結果はまだありません",
             .probeRunning: "実行中",
             .probeEnableBackground: "バックグラウンド LaunchDaemon を有効化",
@@ -856,11 +903,19 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .probeScheduled: "예약",
             .probeInterval: "간격",
             .probeSize: "크기",
+            .probeScheduledSize: "예약 크기",
+            .probeManualSize: "수동 크기",
+            .probeAdvancedManualSize: "64 MiB를 초과하는 수동 검사는 네트워크 트래픽을 시작하기 전에 확인이 필요합니다.",
+            .runLargeProbeTitle: "큰 검사 실행?",
             .probeExecutionMode: "실행",
             .probeAppOpenMode: "앱 열림",
             .probeBackgroundMode: "백그라운드",
             .probeLatest: "최근 결과",
             .probeHistory: "기록",
+            .probeWrite: "쓰기",
+            .probeRead: "읽기",
+            .probeDuration: "시간",
+            .probeCleanup: "정리",
             .probeNoResults: "아직 검사 결과 없음",
             .probeRunning: "실행 중",
             .probeEnableBackground: "백그라운드 LaunchDaemon 활성화",
@@ -1015,11 +1070,19 @@ enum AppTextKey: String, CaseIterable {
     case probeScheduled
     case probeInterval
     case probeSize
+    case probeScheduledSize
+    case probeManualSize
+    case probeAdvancedManualSize
+    case runLargeProbeTitle
     case probeExecutionMode
     case probeAppOpenMode
     case probeBackgroundMode
     case probeLatest
     case probeHistory
+    case probeWrite
+    case probeRead
+    case probeDuration
+    case probeCleanup
     case probeNoResults
     case probeRunning
     case probeEnableBackground

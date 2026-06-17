@@ -16,7 +16,9 @@ let package = Package(
         .library(name: "ZeroFSPerformance", targets: ["ZeroFSPerformance"]),
         .library(name: "ZeroFSPackagingSupport", targets: ["ZeroFSPackagingSupport"]),
         .library(name: "ZeroFSPrivilegedHelperCore", targets: ["ZeroFSPrivilegedHelperCore"]),
+        .library(name: "ZeroFSProbeToolCore", targets: ["ZeroFSProbeToolCore"]),
         .executable(name: "ZeroFSProbeTool", targets: ["ZeroFSProbeTool"]),
+        .executable(name: "ZeroFSProbeTests", targets: ["ZeroFSProbeTests"]),
         .executable(name: "ZeroFSManagerChecks", targets: ["ZeroFSManagerChecks"])
     ],
     targets: [
@@ -89,10 +91,19 @@ let package = Package(
         .executableTarget(
             name: "ZeroFSProbeTool",
             dependencies: [
+                "ZeroFSProbeToolCore",
                 "ZeroFSManagerDomain",
                 "ZeroFSPerformance"
             ],
             path: "Sources/ZeroFSProbeTool"
+        ),
+        .target(
+            name: "ZeroFSProbeToolCore",
+            dependencies: [
+                "ZeroFSManagerDomain",
+                "ZeroFSPerformance"
+            ],
+            path: "Sources/ZeroFSProbeToolCore"
         ),
         .executableTarget(
             name: "ZeroFSManagerChecks",
@@ -106,6 +117,24 @@ let package = Package(
                 "ZeroFSPrivilegedHelperCore"
             ],
             path: "Sources/ZeroFSManagerChecks"
+        ),
+        .executableTarget(
+            name: "ZeroFSProbeTests",
+            dependencies: [
+                "ZeroFSManagerDomain",
+                "ZeroFSPerformance",
+                "ZeroFSProbeToolCore"
+            ],
+            path: "Sources/ZeroFSProbeTests"
+        ),
+        .testTarget(
+            name: "ZeroFSProbeXCTests",
+            dependencies: [
+                "ZeroFSManagerDomain",
+                "ZeroFSPerformance",
+                "ZeroFSProbeToolCore"
+            ],
+            path: "Tests/ZeroFSProbeXCTests"
         )
     ]
 )

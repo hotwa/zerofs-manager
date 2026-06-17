@@ -97,6 +97,16 @@ public struct ZeroFSManagerRootView: View {
                 secondaryButton: .cancel()
             )
         }
+        .alert(item: $model.probeConfirmation) { confirmation in
+            Alert(
+                title: Text(language.text(.runLargeProbeTitle)),
+                message: Text(language.runLargeProbeMessage(sizeMegabytes: confirmation.sizeMegabytes)),
+                primaryButton: .default(Text(language.text(.runTest))) {
+                    Task { await model.runReliabilityProbe(confirmation.profileID, trigger: .manual) }
+                },
+                secondaryButton: .cancel()
+            )
+        }
         .environment(\.locale, Locale(identifier: language.localeIdentifier))
         .onAppear {
             model.language = language
@@ -472,7 +482,7 @@ private struct ReliabilityProbeSection: View {
                 ))
                 Spacer()
                 Button {
-                    Task { await model.runReliabilityProbe(profile.id, trigger: .manual) }
+                    model.requestReliabilityProbe(profile.id)
                 } label: {
                     Label(language.text(.probeTestNow), systemImage: "network")
                 }
@@ -491,7 +501,7 @@ private struct ReliabilityProbeSection: View {
             .pickerStyle(.segmented)
             .disabled(!settings.enabled)
 
-            Picker(language.text(.probeSize), selection: Binding(
+            Picker(language.text(.probeScheduledSize), selection: Binding(
                 get: { settings.sizeBytes },
                 set: { model.setProbeSize(profile.id, bytes: $0) }
             )) {
@@ -500,6 +510,18 @@ private struct ReliabilityProbeSection: View {
                 Text("16 MiB").tag(Int64(16 * 1_048_576))
             }
             .pickerStyle(.segmented)
+
+            Picker(language.text(.probeManualSize), selection: Binding(
+                get: { settings.manualSizeBytes },
+                set: { model.setProbeManualSize(profile.id, bytes: $0) }
+            )) {
+                Text("4 MiB").tag(Int64(4 * 1_048_576))
+                Text("16 MiB").tag(Int64(16 * 1_048_576))
+                Text("64 MiB").tag(Int64(64 * 1_048_576))
+                Text("512 MiB").tag(Int64(512 * 1_048_576))
+            }
+            .pickerStyle(.segmented)
+            .help(language.text(.probeAdvancedManualSize))
 
             Picker(language.text(.probeExecutionMode), selection: Binding(
                 get: { settings.backgroundLaunchDaemonEnabled },
@@ -533,6 +555,9 @@ private struct ReliabilityProbeSection: View {
                         .lineLimit(1)
                 }
             }
+            if let latest {
+                ProbeResultDetailGrid(result: latest, language: language)
+            }
 
             if history.isEmpty {
                 Text(language.text(.probeNoResults))
@@ -546,12 +571,21 @@ private struct ReliabilityProbeSection: View {
                     ForEach(history) { result in
                         HStack(spacing: 8) {
                             ProbeReliabilityIcon(
-                                classification: ReliabilityClassifier.classification(settings: ProbeSettings(enabled: true), latestResult: result),
+                                classification: ReliabilityClassifier.classification(
+                                    settings: ProbeSettings(enabled: true),
+                                    latestResult: result,
+                                    history: model.probeResults(for: profile.id)
+                                ),
                                 isRunning: false,
                                 language: language
                             )
-                            Text(result.startedAt.formatted(date: .abbreviated, time: .shortened))
-                            Spacer()
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(result.startedAt.formatted(date: .abbreviated, time: .shortened))
+                                Text(result.detailedSummary)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
                             Text(result.compactSummary)
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
@@ -561,6 +595,64 @@ private struct ReliabilityProbeSection: View {
                 }
             }
         }
+    }
+}
+
+private struct ProbeResultDetailGrid: View {
+    var result: ProbeResult
+    var language: AppLanguage
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 130), spacing: 8, alignment: .leading)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+            ProbeDetailPill(
+                title: language.text(.probeWrite),
+                value: result.diagnostics.writeMiBPerSecond.map { String(format: "%.1f MiB/s", $0) } ?? "-"
+            )
+            ProbeDetailPill(
+                title: language.text(.probeRead),
+                value: result.diagnostics.readMiBPerSecond.map { String(format: "%.1f MiB/s", $0) } ?? "-"
+            )
+            ProbeDetailPill(
+                title: language.text(.probeDuration),
+                value: String(format: "%.2fs", result.diagnostics.durationSeconds)
+            )
+            ProbeDetailPill(
+                title: language.text(.probeCleanup),
+                value: result.diagnostics.cleanupSummary
+            )
+            if let failureReason = result.diagnostics.failureReason, !failureReason.isEmpty {
+                ProbeDetailPill(
+                    title: language.text(.lastError),
+                    value: failureReason
+                )
+            }
+        }
+    }
+}
+
+private struct ProbeDetailPill: View {
+    var title: String
+    var value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption)
+                .monospacedDigit()
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -961,6 +1053,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
     @Published var mountFailure: MountFailure?
     @Published var devModeGuidance: DevModeGuidance?
     @Published var performanceConfirmation: PerformanceConfirmation?
+    @Published var probeConfirmation: ProbeConfirmation?
     @Published var notifications: [MountNotification] = []
     @Published var zeroFSBinary: ZeroFSBinary?
     @Published var endpointReachability: EndpointReachabilityState = .notChecked
@@ -1128,7 +1221,11 @@ final class ZeroFSManagerViewModel: ObservableObject {
     }
 
     func reliabilityClassification(for id: ProfileID) -> ReliabilityClassification {
-        ReliabilityClassifier.classification(settings: probeSettings(for: id), latestResult: latestProbeResult(for: id))
+        ReliabilityClassifier.classification(
+            settings: probeSettings(for: id),
+            latestResult: latestProbeResult(for: id),
+            history: probeResults(for: id)
+        )
     }
 
     func isReliabilityProbeRunning(_ id: ProfileID) -> Bool {
@@ -1145,7 +1242,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
         if let failureReason = latest.failureReason, !failureReason.isEmpty {
             return failureReason
         }
-        return "\(latest.outcome.rawValue) · \(latest.compactSummary)"
+        return "\(latest.outcome.rawValue) · \(latest.detailedSummary)"
     }
 
     func setProbeSchedule(_ id: ProfileID, enabled: Bool) {
@@ -1166,7 +1263,13 @@ final class ZeroFSManagerViewModel: ObservableObject {
 
     func setProbeSize(_ id: ProfileID, bytes: Int64) {
         updateProbeSettings(id) { settings in
-            settings.sizeBytes = min(max(1, bytes), ProbeDefaults.scheduledMaxSizeBytes)
+            settings.sizeBytes = ProbeSizePolicy.resolvedScheduledSize(requestedBytes: bytes)
+        }
+    }
+
+    func setProbeManualSize(_ id: ProfileID, bytes: Int64) {
+        updateProbeSettings(id) { settings in
+            settings.manualSizeBytes = ProbeSizePolicy.resolvedManualSize(requestedBytes: bytes, confirmedLarge: true)
         }
     }
 
@@ -1177,6 +1280,18 @@ final class ZeroFSManagerViewModel: ObservableObject {
                 settings.enabled = true
             }
         }
+    }
+
+    func requestReliabilityProbe(_ id: ProfileID) {
+        let requestedBytes = probeSettings(for: id).manualSizeBytes
+        guard ProbeSizePolicy.requiresLargeManualConfirmation(sizeBytes: requestedBytes) else {
+            Task { await runReliabilityProbe(id, trigger: .manual) }
+            return
+        }
+        probeConfirmation = ProbeConfirmation(
+            profileID: id,
+            sizeMegabytes: Int(requestedBytes / 1_048_576)
+        )
     }
 
     func runReliabilityProbe(_ id: ProfileID, trigger: ProbeTrigger) async {
@@ -1239,9 +1354,10 @@ final class ZeroFSManagerViewModel: ObservableObject {
             profileID: id,
             mountDirectory: URL(fileURLWithPath: profile.mountPath, isDirectory: true),
             workDirectory: workDirectory,
-            sizeBytes: min(probeSettings(for: id).sizeBytes, ProbeDefaults.manualMaxSizeBytesWithoutConfirmation),
+            sizeBytes: probeSizeBytes(for: id, trigger: trigger),
             trigger: trigger
         )
+        recordProbeRunTimestamp(profileID: id, trigger: trigger, startedAt: result.startedAt)
         appendProbeResult(result, redactingSecrets: redactionSecrets(for: profile))
         if let index = profiles.firstIndex(where: { $0.id == id }) {
             profiles[index].lastError = reliabilitySummary(for: id, language: language)
@@ -1384,8 +1500,8 @@ final class ZeroFSManagerViewModel: ObservableObject {
             let settings = probeSettings(for: profile.id)
             guard settings.enabled, !settings.backgroundLaunchDaemonEnabled else { continue }
             guard !runningReliabilityProbeIDs.contains(profile.id) else { continue }
-            if let latest = latestProbeResult(for: profile.id),
-               now.timeIntervalSince(latest.startedAt) < TimeInterval(settings.intervalSeconds) {
+            if let lastScheduled = settings.lastScheduledProbeAt,
+               now.timeIntervalSince(lastScheduled) < TimeInterval(settings.intervalSeconds) {
                 continue
             }
             guard applyLocalMountState(for: profile.id) else { continue }
@@ -1397,9 +1513,31 @@ final class ZeroFSManagerViewModel: ObservableObject {
         var settings = probeSettings(for: id)
         mutate(&settings)
         settings.intervalSeconds = max(60, settings.intervalSeconds)
-        settings.sizeBytes = min(max(1, settings.sizeBytes), ProbeDefaults.scheduledMaxSizeBytes)
+        settings.sizeBytes = ProbeSizePolicy.resolvedScheduledSize(requestedBytes: settings.sizeBytes)
+        settings.manualSizeBytes = ProbeSizePolicy.resolvedManualSize(requestedBytes: settings.manualSizeBytes, confirmedLarge: true)
         probeSettingsByProfile[id] = settings
         persistProbeSettings()
+    }
+
+    private func probeSizeBytes(for id: ProfileID, trigger: ProbeTrigger) -> Int64 {
+        let settings = probeSettings(for: id)
+        switch trigger {
+        case .manual:
+            return ProbeSizePolicy.resolvedManualSize(requestedBytes: settings.manualSizeBytes, confirmedLarge: true)
+        case .inAppSchedule, .backgroundLaunchDaemon:
+            return ProbeSizePolicy.resolvedScheduledSize(requestedBytes: settings.sizeBytes)
+        }
+    }
+
+    private func recordProbeRunTimestamp(profileID: ProfileID, trigger: ProbeTrigger, startedAt: Date) {
+        updateProbeSettings(profileID) { settings in
+            switch trigger {
+            case .manual:
+                settings.lastManualProbeAt = startedAt
+            case .inAppSchedule, .backgroundLaunchDaemon:
+                settings.lastScheduledProbeAt = startedAt
+            }
+        }
     }
 
     private func persistProbeSettings() {
@@ -2426,6 +2564,15 @@ struct PerformanceConfirmation: Identifiable {
     }
 }
 
+struct ProbeConfirmation: Identifiable {
+    var profileID: ProfileID
+    var sizeMegabytes: Int
+
+    var id: ProfileID {
+        profileID
+    }
+}
+
 private extension ReliabilityClassification {
     var color: Color {
         switch self {
@@ -2473,9 +2620,15 @@ private extension ReliabilityClassification {
 
 private extension ProbeResult {
     var compactSummary: String {
-        let write = String(format: "%.2fs", writeSeconds)
-        let read = String(format: "%.2fs", readSeconds)
-        return "\(Int(sizeBytes / 1_048_576)) MiB W \(write) R \(read)"
+        "\(Int(sizeBytes / 1_048_576)) MiB"
+    }
+
+    var detailedSummary: String {
+        let details = self.diagnostics
+        let write = details.writeMiBPerSecond.map { String(format: "W %.1f MiB/s", $0) } ?? "W -"
+        let read = details.readMiBPerSecond.map { String(format: "R %.1f MiB/s", $0) } ?? "R -"
+        let duration = String(format: "%.2fs", details.durationSeconds)
+        return "\(write) · \(read) · \(duration) · \(details.cleanupSummary)"
     }
 }
 

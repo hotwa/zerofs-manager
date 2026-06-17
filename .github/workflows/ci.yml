@@ -21,6 +21,12 @@ jobs:
       - name: Build
         run: swift build
 
+      - name: Run Swift tests
+        run: swift test
+
+      - name: Run probe regression tests
+        run: swift run ZeroFSProbeTests
+
       - name: Run project checks
         run: swift run ZeroFSManagerChecks
 

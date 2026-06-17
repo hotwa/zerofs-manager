@@ -743,8 +743,24 @@ struct ZeroFSManagerChecks {
         checks.expect(!defaults.enabled, "reliability probes default to disabled")
         checks.expect(defaults.intervalSeconds == 3_600, "reliability probe default interval is 60 minutes")
         checks.expect(defaults.sizeBytes == 4 * 1_048_576, "reliability probe default size is 4 MiB")
+        checks.expect(defaults.manualSizeBytes == 4 * 1_048_576, "manual reliability probe default size is 4 MiB")
+        checks.expect(defaults.lastScheduledProbeAt == nil, "reliability probe scheduled timestamp defaults empty")
+        checks.expect(defaults.lastManualProbeAt == nil, "reliability probe manual timestamp defaults empty")
         checks.expect(ProbeDefaults.scheduledMaxSizeBytes == 16 * 1_048_576, "scheduled probe max size is 16 MiB")
         checks.expect(ProbeDefaults.manualMaxSizeBytesWithoutConfirmation == 64 * 1_048_576, "manual probe max without confirmation is 64 MiB")
+        checks.expect(ProbeDefaults.confirmedManualMaxSizeBytes == 512 * 1_048_576, "confirmed manual probe max is 512 MiB")
+        checks.expect(
+            ProbeSizePolicy.resolvedScheduledSize(requestedBytes: 512 * 1_048_576) == ProbeDefaults.scheduledMaxSizeBytes,
+            "probe size policy caps scheduled probes at 16 MiB"
+        )
+        checks.expect(
+            ProbeSizePolicy.resolvedManualSize(requestedBytes: 512 * 1_048_576, confirmedLarge: false) == ProbeDefaults.manualMaxSizeBytesWithoutConfirmation,
+            "probe size policy caps unconfirmed manual probes at 64 MiB"
+        )
+        checks.expect(
+            ProbeSizePolicy.resolvedManualSize(requestedBytes: 512 * 1_048_576, confirmedLarge: true) == ProbeDefaults.confirmedManualMaxSizeBytes,
+            "probe size policy allows confirmed 512 MiB manual probes"
+        )
 
         checks.expect(
             ReliabilityClassifier.classification(settings: ProbeSettings(enabled: false), latestResult: nil) == .disabled,
@@ -794,12 +810,53 @@ struct ZeroFSManagerChecks {
             "very slow reliability probes classify yellow"
         )
 
+        var historyLatest = healthy
+        historyLatest.id = UUID()
+        historyLatest.startedAt = now.addingTimeInterval(100)
+        historyLatest.endedAt = historyLatest.startedAt.addingTimeInterval(0.55)
+        historyLatest.sizeBytes = 10 * 1_048_576
+        historyLatest.writeSeconds = 0.25
+        historyLatest.readSeconds = 0.20
+        let historyBaseline = (0..<10).map { offset in
+            var sample = healthy
+            sample.id = UUID()
+            sample.startedAt = now.addingTimeInterval(Double(offset))
+            sample.endedAt = sample.startedAt.addingTimeInterval(0.3)
+            sample.sizeBytes = 10 * 1_048_576
+            sample.writeSeconds = 0.10
+            sample.readSeconds = 0.10
+            return sample
+        }
+        checks.expect(
+            ReliabilityClassifier.classification(
+                settings: ProbeSettings(enabled: true),
+                latestResult: historyLatest,
+                history: [historyLatest] + historyBaseline
+            ) == .degraded,
+            "history-aware reliability classification flags a recent throughput drop"
+        )
+
         let storeRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: storeRoot) }
         let settingsStore = FileProbeSettingsStore(fileURL: storeRoot.appendingPathComponent("probe-settings.json"))
-        try settingsStore.save([profileID: ProbeSettings(enabled: true, intervalSeconds: 900, sizeBytes: 1_048_576)])
+        let scheduledAt = now.addingTimeInterval(-900)
+        let manualAt = now.addingTimeInterval(-120)
+        try settingsStore.save([
+            profileID: ProbeSettings(
+                enabled: true,
+                intervalSeconds: 900,
+                sizeBytes: 1_048_576,
+                manualSizeBytes: 512 * 1_048_576,
+                backgroundLaunchDaemonEnabled: false,
+                lastScheduledProbeAt: scheduledAt,
+                lastManualProbeAt: manualAt
+            )
+        ])
         let loadedSettings = try settingsStore.load()
         checks.expect(loadedSettings[profileID]?.intervalSeconds == 900, "probe settings are stored outside profiles.json")
+        checks.expect(loadedSettings[profileID]?.manualSizeBytes == 512 * 1_048_576, "probe settings persist manual probe size")
+        checks.expect(loadedSettings[profileID]?.lastScheduledProbeAt == scheduledAt, "probe settings persist last scheduled probe timestamp")
+        checks.expect(loadedSettings[profileID]?.lastManualProbeAt == manualAt, "probe settings persist last manual probe timestamp")
 
         let retention = ProbeResultRetention(maxRecordsPerProfile: 3, maxAgeSeconds: 60 * 60 * 24 * 30)
         let resultStore = FileProbeResultStore(directoryURL: storeRoot.appendingPathComponent("ProbeResults"), retention: retention)
@@ -950,10 +1007,17 @@ struct ZeroFSManagerChecks {
         let packageSource = try String(contentsOf: projectRoot.appendingPathComponent("Package.swift"), encoding: .utf8)
         checks.expect(packageSource.contains(".executable(name: \"ZeroFSProbeTool\""), "Swift package exposes ZeroFSProbeTool executable product")
         checks.expect(packageSource.contains("name: \"ZeroFSProbeTool\""), "Swift package builds ZeroFSProbeTool target")
+        checks.expect(packageSource.contains(".executable(name: \"ZeroFSProbeTests\""), "Swift package exposes probe regression test executable")
+        checks.expect(packageSource.contains(".testTarget(\n            name: \"ZeroFSProbeXCTests\""), "Swift package includes an XCTest target for probe behavior")
+        checks.expect(packageSource.contains("ZeroFSProbeToolCore"), "Swift package extracts probe tool behavior into a testable core library")
         let probeToolSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSProbeTool/main.swift"), encoding: .utf8)
-        checks.expect(probeToolSource.contains("ProbeToolExit.code(1)"), "ZeroFSProbeTool failure exits unwind lock cleanup before returning status")
-        checks.expect(probeToolSource.contains("redactionSecretsFromEnvironment"), "ZeroFSProbeTool redacts secrets from the root runtime environment")
-        checks.expect(probeToolSource.contains("--skip-reason"), "ZeroFSProbeTool can persist skipped background probe results")
+        let probeToolCoreSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSProbeToolCore/ProbeToolCore.swift"), encoding: .utf8)
+        checks.expect(probeToolSource.contains("ProbeToolSupport.exitCode"), "ZeroFSProbeTool computes exit status after lock cleanup")
+        checks.expect(probeToolSource.contains("ProbeToolSupport.redactionSecrets"), "ZeroFSProbeTool redacts secrets from the root runtime environment")
+        checks.expect(probeToolCoreSource.contains("resultJSON"), "ZeroFSProbeToolCore exposes sanitized JSON generation for tests")
+        checks.expect(probeToolCoreSource.contains("case .failed:\n            return 1"), "ZeroFSProbeToolCore maps failed probes to exit code 1")
+        checks.expect(probeToolCoreSource.contains("case .skipped:\n            return 75"), "ZeroFSProbeToolCore maps skipped probes to temporary failure exit code 75")
+        checks.expect(probeToolCoreSource.contains("--skip-reason"), "ZeroFSProbeTool can persist skipped background probe results")
         checks.expect(!probeToolSource.contains("case .failed:\n                terminate(1)"), "ZeroFSProbeTool does not exit directly while holding a probe lock")
         checks.expect(!probeToolSource.contains("case .skipped:\n                terminate(75)"), "ZeroFSProbeTool does not exit directly while holding a probe lock after skipped runs")
         let reliabilityProbeSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSPerformance/ReliabilityProbes.swift"), encoding: .utf8)
@@ -965,7 +1029,12 @@ struct ZeroFSManagerChecks {
         checks.expect(rootViewSource.contains("LocalPerformanceHelper"), "GitHub-style dev performance tests can run against an existing local mount without helper registration")
         checks.expect(rootViewSource.contains("ReliabilityProbeSection"), "UI includes reliability probe controls")
         checks.expect(rootViewSource.contains("ProbeReliabilityIcon"), "mount list shows reliability health icons")
-        checks.expect(rootViewSource.contains("runReliabilityProbe"), "UI can trigger a manual reliability probe")
+        checks.expect(rootViewSource.contains("requestReliabilityProbe"), "UI can trigger manual reliability probes through confirmation flow")
+        checks.expect(rootViewSource.contains("probeConfirmation"), "UI confirms large manual reliability probes")
+        checks.expect(rootViewSource.contains("ProbeResultDetailGrid"), "UI shows richer reliability probe result details")
+        checks.expect(rootViewSource.contains("setProbeManualSize"), "UI separates manual reliability probe size from scheduled size")
+        checks.expect(rootViewSource.contains("lastScheduledProbeAt"), "app scheduler uses explicit last scheduled probe timestamp")
+        checks.expect(rootViewSource.contains("lastManualProbeAt"), "app records explicit last manual probe timestamp")
         checks.expect(rootViewSource.contains("startProbeScheduler"), "app-open scheduler starts enabled reliability probes")
         checks.expect(rootViewSource.contains("refreshBackgroundProbeResults"), "UI reads sanitized background probe results")
         checks.expect(rootViewSource.contains("backgroundProbeResultStore.directoryURL.appendingPathComponent(profileID.rawValue"), "UI reads nested per-profile background probe results")
@@ -1005,10 +1074,17 @@ struct ZeroFSManagerChecks {
         checks.expect(localizationSource.contains("GitHub 스타일 개발 빌드"), "localization includes Korean GitHub distribution copy")
         checks.expect(localizationSource.contains("적용 후 LaunchDaemon 재시작"), "localization includes Korean sudo launchd copy")
         checks.expect(localizationSource.contains("Reliability Probe"), "localization includes English reliability probe copy")
+        checks.expect(localizationSource.contains("Run Large Probe?"), "localization includes English large probe confirmation copy")
+        checks.expect(localizationSource.contains("Scheduled Size"), "localization includes English scheduled probe size copy")
+        checks.expect(localizationSource.contains("Manual Size"), "localization includes English manual probe size copy")
         checks.expect(localizationSource.contains("可靠性检测"), "localization includes Simplified Chinese reliability probe copy")
+        checks.expect(localizationSource.contains("运行大尺寸检测？"), "localization includes Simplified Chinese large probe confirmation copy")
         checks.expect(localizationSource.contains("可靠性檢測"), "localization includes Traditional Chinese reliability probe copy")
+        checks.expect(localizationSource.contains("執行大尺寸檢測？"), "localization includes Traditional Chinese large probe confirmation copy")
         checks.expect(localizationSource.contains("信頼性プローブ"), "localization includes Japanese reliability probe copy")
+        checks.expect(localizationSource.contains("大きいプローブを実行しますか？"), "localization includes Japanese large probe confirmation copy")
         checks.expect(localizationSource.contains("안정성 검사"), "localization includes Korean reliability probe copy")
+        checks.expect(localizationSource.contains("큰 검사 실행?"), "localization includes Korean large probe confirmation copy")
         let verifyBundleScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/verify-bundle.sh"), encoding: .utf8)
         checks.expect(verifyBundleScript.contains("codesign --verify --deep --strict"), "bundle verification enforces strict codesign")
         let requiredDevScripts = [
