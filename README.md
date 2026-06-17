@@ -1,3 +1,5 @@
+[简体中文](docs/README.zh-CN.md) / [English](README.md) / [日本語](docs/README.ja.md) / [한국어](docs/README.ko.md) / [繁體中文](docs/README.zh-TW.md)
+
 # ZeroFS Manager
 
 ZeroFS Manager is a macOS SwiftUI app for configuring external ZeroFS CLI mounts backed by S3-compatible object storage.
