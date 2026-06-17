@@ -2,6 +2,8 @@
 
 ZeroFS Manager does not embed or redistribute the ZeroFS binary.
 
+Upstream ZeroFS is https://github.com/Barre/ZeroFS and GitHub reports its license as AGPL-3.0. Keep this resource as installer guidance only; do not vendor ZeroFS source or binaries into the app bundle or release artifacts unless the project has a reviewed AGPL/commercial-license compliance plan.
+
 Users install ZeroFS separately:
 
 ```sh

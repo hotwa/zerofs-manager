@@ -7,42 +7,46 @@ import ZeroFSManagerSecrets
 
 public struct ZeroFSManagerRootView: View {
     @StateObject private var model = ZeroFSManagerViewModel()
+    @AppStorage(AppLanguage.storageKey) private var languageID = AppLanguage.preferred().rawValue
 
     public init() {}
 
     public var body: some View {
+        let language = AppLanguage.resolved(rawValue: languageID)
         NavigationSplitView {
             List(selection: $model.selectedProfileID) {
                 Section {
                     ForEach(model.profiles) { profile in
-                        MountRow(profile: profile)
+                        MountRow(profile: profile, language: language)
                             .tag(profile.id)
                     }
                 } header: {
-                    Label("Mounts", systemImage: "externaldrive.fill")
+                    Label(language.text(.mounts), systemImage: "externaldrive.fill")
                 }
             }
             .listStyle(.sidebar)
             .navigationTitle("ZeroFS")
             .toolbar {
+                LanguageMenu(selection: $languageID, language: language)
                 Button {
                     model.addProfile()
                 } label: {
                     Image(systemName: "plus")
                 }
-                .help("Add mount profile")
+                .help(language.text(.addMountProfile))
             }
         } detail: {
             if let binding = model.selectedProfileBinding {
-                ProfileDetailView(profile: binding, model: model)
+                ProfileDetailView(profile: binding, model: model, language: language)
             } else {
-                EmptyMountSelectionView()
+                EmptyMountSelectionView(language: language)
             }
         }
         .frame(minWidth: 980, minHeight: 680)
         .sheet(item: $model.mountFailure) { failure in
             MountFailurePanel(
                 failure: failure,
+                language: language,
                 retry: {
                     Task { await model.retryMount(failure.profileID) }
                 },
@@ -63,6 +67,7 @@ public struct ZeroFSManagerRootView: View {
         .sheet(item: $model.devModeGuidance) { guidance in
             DevModeGuidancePanel(
                 guidance: guidance,
+                language: language,
                 runManualMountTest: {
                     Task { await model.runManualMountTest(guidance.profileID) }
                 },
@@ -79,13 +84,20 @@ public struct ZeroFSManagerRootView: View {
         }
         .alert(item: $model.performanceConfirmation) { confirmation in
             Alert(
-                title: Text("Run Performance Test?"),
-                message: Text("This writes and reads \(confirmation.sizeMegabytes) MB through the mounted filesystem, then removes the test files."),
-                primaryButton: .default(Text("Run Test")) {
+                title: Text(language.text(.runPerformanceTestTitle)),
+                message: Text(language.runPerformanceTestMessage(sizeMegabytes: confirmation.sizeMegabytes)),
+                primaryButton: .default(Text(language.text(.runTest))) {
                     Task { await model.runPerformanceTest(confirmation.profileID) }
                 },
                 secondaryButton: .cancel()
             )
+        }
+        .environment(\.locale, Locale(identifier: language.localeIdentifier))
+        .onAppear {
+            model.language = language
+        }
+        .onChange(of: languageID) { newValue in
+            model.language = AppLanguage.resolved(rawValue: newValue)
         }
         .task {
             await model.runStartupChecks()
@@ -93,13 +105,39 @@ public struct ZeroFSManagerRootView: View {
     }
 }
 
+private struct LanguageMenu: View {
+    @Binding var selection: String
+    var language: AppLanguage
+
+    var body: some View {
+        Menu {
+            ForEach(AppLanguage.allCases) { option in
+                Button {
+                    selection = option.rawValue
+                } label: {
+                    if option == language {
+                        Label(option.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(option.displayName)
+                    }
+                }
+            }
+        } label: {
+            Label(language.text(.language), systemImage: "globe")
+        }
+        .help(language.text(.chooseLanguage))
+    }
+}
+
 private struct EmptyMountSelectionView: View {
+    var language: AppLanguage
+
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "externaldrive.badge.questionmark")
                 .font(.system(size: 42, weight: .regular))
                 .foregroundStyle(.secondary)
-            Text("No Mount")
+            Text(language.text(.noMount))
                 .font(.title3)
                 .fontWeight(.semibold)
         }
@@ -109,6 +147,7 @@ private struct EmptyMountSelectionView: View {
 
 private struct MountRow: View {
     var profile: EditableMountProfile
+    var language: AppLanguage
 
     var body: some View {
         HStack(spacing: 11) {
@@ -138,7 +177,7 @@ private struct MountRow: View {
             Image(systemName: profile.autoMount == .afterLogin ? "bolt.circle.fill" : "circle")
                 .font(.caption)
                 .foregroundStyle(profile.autoMount == .afterLogin ? Color.yellow : Color.secondary.opacity(0.45))
-                .help(profile.autoMount == .afterLogin ? "Auto mount after login" : "Auto mount off")
+                .help(profile.autoMount == .afterLogin ? language.text(.autoMountAfterLoginHelp) : language.text(.autoMountOffHelp))
         }
         .padding(.vertical, 5)
     }
@@ -147,99 +186,102 @@ private struct MountRow: View {
 private struct ProfileDetailView: View {
     @Binding var profile: EditableMountProfile
     @ObservedObject var model: ZeroFSManagerViewModel
+    var language: AppLanguage
 
     var body: some View {
         VStack(spacing: 0) {
-            Header(profile: profile, model: model)
+            Header(profile: profile, model: model, language: language)
             Divider()
             Form {
-                Section("Distribution") {
+                Section(language.text(.distribution)) {
                     DistributionModeBanner(
                         mode: model.distributionMode,
-                        teamIdentifier: model.currentTeamIdentifier
+                        teamIdentifier: model.currentTeamIdentifier,
+                        language: language
                     )
                 }
 
-                Section("ZeroFS CLI") {
+                Section(language.text(.zeroFSCLI)) {
                     ZeroFSDependencyView(
                         binary: model.zeroFSBinary,
                         installCommand: ZeroFSInstallGuidance.recommendedShellCommand,
+                        language: language,
                         redetect: model.detectZeroFS,
                         copyInstallCommand: model.copyZeroFSInstallCommand
                     )
                 }
 
-                Section("Object Storage") {
-                    TextField("Display Name", text: $profile.displayName)
-                    TextField("Endpoint", text: $profile.endpoint)
-                    TextField("Bucket", text: $profile.bucket)
-                    TextField("Prefix", text: $profile.prefix)
-                    SecureField("Access Key", text: $profile.accessKey)
-                    SecureField("Secret Key", text: $profile.secretKey)
-                    SecureField("ZeroFS Password", text: $profile.encryptionPassword)
+                Section(language.text(.objectStorage)) {
+                    TextField(language.text(.displayName), text: $profile.displayName)
+                    TextField(language.text(.endpoint), text: $profile.endpoint)
+                    TextField(language.text(.bucket), text: $profile.bucket)
+                    TextField(language.text(.prefix), text: $profile.prefix)
+                    SecureField(language.text(.accessKey), text: $profile.accessKey)
+                    SecureField(language.text(.secretKey), text: $profile.secretKey)
+                    SecureField(language.text(.zeroFSPassword), text: $profile.encryptionPassword)
                 }
 
-                Section("Mount") {
+                Section(language.text(.mountSection)) {
                     HStack {
-                        TextField("Mount Directory", text: $profile.mountPath)
+                        TextField(language.text(.mountDirectory), text: $profile.mountPath)
                         Button {
                             model.chooseMountDirectory(for: profile.id)
                         } label: {
                             Image(systemName: "folder")
                         }
-                        .help("Choose mount directory")
+                        .help(language.text(.chooseMountDirectory))
                     }
                     if model.distributionMode.allowsLoginAutoMount {
-                        Picker("Auto Mount", selection: $profile.autoMount) {
-                            Text("Off").tag(AutoMountPolicy.disabled)
-                            Text("After Login").tag(AutoMountPolicy.afterLogin)
+                        Picker(language.text(.autoMount), selection: $profile.autoMount) {
+                            Text(language.text(.off)).tag(AutoMountPolicy.disabled)
+                            Text(language.text(.afterLogin)).tag(AutoMountPolicy.afterLogin)
                         }
                     } else {
-                        LabeledContent("Auto Mount") {
+                        LabeledContent(language.text(.autoMount)) {
                             HStack(spacing: 8) {
-                                Text("Release-only")
+                                Text(language.text(.releaseOnly))
                                     .foregroundStyle(.secondary)
                                 Button {
                                     model.showDevModeGuidance(for: profile.id)
                                 } label: {
-                                    Label("Enable Auto Mount", systemImage: "bolt.fill")
+                                    Label(language.text(.enableAutoMount), systemImage: "bolt.fill")
                                 }
                             }
                         }
-                        Text("Auto Mount is disabled in GitHub-style dev mode so launch does not trigger SMAppService or privileged helper registration.")
+                        Text(language.text(.devAutoMountDisabled))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Stepper(value: $profile.quotaGigabytes, in: 1...1_048_576, step: 1) {
-                        LabeledContent("Quota") {
+                        LabeledContent(language.text(.quota)) {
                             Text("\(Int(profile.quotaGigabytes)) GB")
                                 .monospacedDigit()
                         }
                     }
                     Stepper(value: $profile.performanceTestMegabytes, in: 1...1_048_576, step: 64) {
-                        LabeledContent("Performance Test") {
+                        LabeledContent(language.text(.performanceTest)) {
                             Text("\(Int(profile.performanceTestMegabytes)) MB")
                                 .monospacedDigit()
                         }
                     }
                 }
 
-                Section("Cache") {
+                Section(language.text(.cache)) {
                     Stepper(value: $profile.diskCacheGigabytes, in: 0...4096, step: 1) {
-                        LabeledContent("Disk Cache") {
+                        LabeledContent(language.text(.diskCache)) {
                             Text("\(Int(profile.diskCacheGigabytes)) GB")
                                 .monospacedDigit()
                         }
                     }
                     Stepper(value: $profile.memoryCacheGigabytes, in: 0...512, step: 0.5) {
-                        LabeledContent("Memory Cache") {
+                        LabeledContent(language.text(.memoryCache)) {
                             Text(profile.memoryCacheGigabytes, format: .number.precision(.fractionLength(1)))
                                 .monospacedDigit()
                         }
                     }
                 }
 
-                Section("Ports") {
+                Section(language.text(.ports)) {
                     Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
                         GridRow {
                             Text("NFS")
@@ -258,12 +300,12 @@ private struct ProfileDetailView: View {
                     }
                 }
 
-                Section("Validation") {
-                    ValidationList(issues: model.validationIssues(for: profile))
+                Section(language.text(.validation)) {
+                    ValidationList(issues: model.validationIssues(for: profile), language: language)
                 }
 
-                Section("Status") {
-                    StatusGrid(profile: profile, endpointReachability: model.endpointReachability)
+                Section(language.text(.status)) {
+                    StatusGrid(profile: profile, endpointReachability: model.endpointReachability, language: language)
                 }
             }
             .formStyle(.grouped)
@@ -274,6 +316,7 @@ private struct ProfileDetailView: View {
 private struct DistributionModeBanner: View {
     var mode: AppDistributionMode
     var teamIdentifier: String?
+    var language: AppLanguage
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -282,12 +325,12 @@ private struct DistributionModeBanner: View {
                 .foregroundStyle(mode == .githubDev ? .orange : .green)
                 .frame(width: 32)
             VStack(alignment: .leading, spacing: 8) {
-                Text(mode.title)
+                Text(mode.title(language: language))
                     .font(.headline)
-                Text(mode.warningText)
+                Text(mode.warningText(language: language))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(teamIdentifier.map { "Apple TeamIdentifier: \($0)" } ?? "No Apple TeamIdentifier. Expected for GitHub-style dev builds; not valid for official release.")
+                Text(language.appleTeamIdentifier(teamIdentifier))
                     .font(.system(.callout, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -302,6 +345,7 @@ private struct DistributionModeBanner: View {
 private struct ZeroFSDependencyView: View {
     var binary: ZeroFSBinary?
     var installCommand: String
+    var language: AppLanguage
     var redetect: () -> Void
     var copyInstallCommand: () -> Void
 
@@ -321,7 +365,7 @@ private struct ZeroFSDependencyView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 if let binary {
-                    Text("ZeroFS CLI Ready")
+                    Text(language.text(.zeroFSCLIReady))
                         .font(.headline)
                     Text(binary.path)
                         .font(.system(.callout, design: .monospaced))
@@ -329,12 +373,12 @@ private struct ZeroFSDependencyView: View {
                         .textSelection(.enabled)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(binary.version ?? "Version unavailable")
+                    Text(binary.version ?? language.text(.versionUnavailable))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 } else {
-                    Text("ZeroFS CLI Missing")
+                    Text(language.text(.zeroFSCLIMissing))
                         .font(.headline)
                     Text(installCommand)
                         .font(.system(.body, design: .monospaced))
@@ -349,13 +393,13 @@ private struct ZeroFSDependencyView: View {
                     Button {
                         redetect()
                     } label: {
-                        Label("Re-detect", systemImage: "arrow.clockwise")
+                        Label(language.text(.redetect), systemImage: "arrow.clockwise")
                     }
                     if binary == nil {
                         Button {
                             copyInstallCommand()
                         } label: {
-                            Label("Copy Install Command", systemImage: "doc.on.doc")
+                            Label(language.text(.copyInstallCommand), systemImage: "doc.on.doc")
                         }
                     }
                 }
@@ -370,6 +414,7 @@ private struct ZeroFSDependencyView: View {
 private struct StatusGrid: View {
     var profile: EditableMountProfile
     var endpointReachability: EndpointReachabilityState
+    var language: AppLanguage
 
     private let columns = [
         GridItem(.adaptive(minimum: 180), spacing: 8, alignment: .top)
@@ -378,44 +423,44 @@ private struct StatusGrid: View {
     var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
             StatusPill(
-                title: "Helper",
-                value: profile.helperRegistration.title,
+                title: language.text(.helper),
+                value: profile.helperRegistration.title(language: language),
                 symbol: profile.helperRegistration.symbol,
                 tint: profile.helperRegistration.color
             )
             StatusPill(
-                title: "ZeroFS Process",
-                value: profile.serviceState.title,
+                title: language.text(.zeroFSProcess),
+                value: profile.serviceState.title(language: language),
                 symbol: profile.serviceState.symbol,
                 tint: profile.serviceState.color
             )
             StatusPill(
-                title: "Mount",
-                value: profile.status.title,
+                title: language.text(.mountSection),
+                value: profile.status.title(language: language),
                 symbol: profile.status.symbol,
                 tint: profile.status.color
             )
             StatusPill(
-                title: "Metrics",
-                value: profile.metricsReachable ? "Reachable" : "Unavailable",
+                title: language.text(.metrics),
+                value: profile.metricsReachable ? language.text(.reachable) : language.text(.unavailable),
                 symbol: profile.metricsReachable ? "chart.line.uptrend.xyaxis" : "chart.line.flattrend.xyaxis",
                 tint: profile.metricsReachable ? .green : .orange
             )
             StatusPill(
-                title: "Endpoint",
-                value: endpointReachability.title,
+                title: language.text(.endpointStatus),
+                value: endpointReachability.title(language: language),
                 symbol: endpointReachability.symbol,
                 tint: endpointReachability.color
             )
             StatusPill(
-                title: "Quota",
-                value: "\(Int(profile.quotaGigabytes)) GB configured",
+                title: language.text(.quotaStatus),
+                value: language.quotaConfigured(Int(profile.quotaGigabytes)),
                 symbol: "internaldrive",
                 tint: .blue
             )
             StatusPill(
-                title: "Last Error",
-                value: profile.lastError.isEmpty ? "None" : profile.lastError,
+                title: language.text(.lastError),
+                value: profile.lastError.isEmpty ? language.text(.none) : profile.lastError,
                 symbol: profile.lastError.isEmpty ? "checkmark.circle" : "text.bubble",
                 tint: profile.lastError.isEmpty ? .secondary : .orange
             )
@@ -457,6 +502,7 @@ private struct StatusPill: View {
 
 private struct MountFailurePanel: View {
     var failure: MountFailure
+    var language: AppLanguage
     var retry: () -> Void
     var openSettings: () -> Void
     var showLogs: () -> Void
@@ -469,7 +515,7 @@ private struct MountFailurePanel: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.title2)
                     .foregroundStyle(.orange)
-                Text("Mount Failed")
+                Text(language.text(.mountFailed))
                     .font(.title2)
                     .fontWeight(.semibold)
             }
@@ -488,7 +534,7 @@ private struct MountFailurePanel: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }
 
-            Text(failure.recovery.guidance)
+            Text(failure.recovery.guidance(language: language))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -498,41 +544,41 @@ private struct MountFailurePanel: View {
                         Button {
                             retry()
                         } label: {
-                            Label("Retry", systemImage: "arrow.clockwise")
+                            Label(language.text(.retry), systemImage: "arrow.clockwise")
                         }
                         .keyboardShortcut(.defaultAction)
-                        .accessibilityLabel("Retry mount")
+                        .accessibilityLabel(language.text(.retryMountAccessibility))
 
                         Button {
                             openSettings()
                         } label: {
-                            Label("Settings", systemImage: "gearshape")
+                            Label(language.text(.settings), systemImage: "gearshape")
                         }
-                        .accessibilityLabel("Open System Settings")
+                        .accessibilityLabel(language.text(.openSystemSettingsAccessibility))
 
                         Button {
                             showLogs()
                         } label: {
-                            Label("Logs", systemImage: "doc.text")
+                            Label(language.text(.logs), systemImage: "doc.text")
                         }
-                        .accessibilityLabel("Show helper logs")
+                        .accessibilityLabel(language.text(.showHelperLogsAccessibility))
                     }
                     HStack {
                         Button {
                             disableAutoMount()
                         } label: {
-                            Label("Disable Auto Mount", systemImage: "bolt.slash")
+                            Label(language.text(.disableAutoMount), systemImage: "bolt.slash")
                         }
-                        .accessibilityLabel("Disable automatic mount")
+                        .accessibilityLabel(language.text(.disableAutoMountAccessibility))
 
                         Spacer()
 
                         Button {
                             dismiss()
                         } label: {
-                            Label("Close", systemImage: "xmark")
+                            Label(language.text(.close), systemImage: "xmark")
                         }
-                        .accessibilityLabel("Close mount failure dialog")
+                        .accessibilityLabel(language.text(.closeMountFailureDialogAccessibility))
                     }
                 } else {
                     HStack {
@@ -540,10 +586,10 @@ private struct MountFailurePanel: View {
                         Button {
                             dismiss()
                         } label: {
-                            Label("Close", systemImage: "xmark")
+                            Label(language.text(.close), systemImage: "xmark")
                         }
                         .keyboardShortcut(.defaultAction)
-                        .accessibilityLabel("Close mount failure dialog")
+                        .accessibilityLabel(language.text(.closeMountFailureDialogAccessibility))
                     }
                 }
             }
@@ -556,6 +602,7 @@ private struct MountFailurePanel: View {
 
 private struct DevModeGuidancePanel: View {
     var guidance: DevModeGuidance
+    var language: AppLanguage
     var runManualMountTest: () -> Void
     var openTroubleshooting: () -> Void
     var copyCLICommand: () -> Void
@@ -567,7 +614,7 @@ private struct DevModeGuidancePanel: View {
                 Image(systemName: "hammer.fill")
                     .font(.title2)
                     .foregroundStyle(.orange)
-                Text("GitHub-style Dev Mode")
+                Text(language.text(.githubDevMode))
                     .font(.title2)
                     .fontWeight(.semibold)
             }
@@ -576,7 +623,7 @@ private struct DevModeGuidancePanel: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Manual CLI and debug launchd paths are only for lower-level S3/ZeroFS testing. They are not the official SMAppService authorization path.")
+            Text(language.text(.devModeNote))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -584,20 +631,20 @@ private struct DevModeGuidancePanel: View {
                 Button {
                     runManualMountTest()
                 } label: {
-                    Label("Run Manual Mount Test", systemImage: "terminal")
+                    Label(language.text(.runManualMountTest), systemImage: "terminal")
                 }
                 .keyboardShortcut(.defaultAction)
 
                 Button {
                     openTroubleshooting()
                 } label: {
-                    Label("Open Troubleshooting", systemImage: "questionmark.circle")
+                    Label(language.text(.openTroubleshooting), systemImage: "questionmark.circle")
                 }
 
                 Button {
                     copyCLICommand()
                 } label: {
-                    Label("Copy CLI Command", systemImage: "doc.on.doc")
+                    Label(language.text(.copyCLICommand), systemImage: "doc.on.doc")
                 }
 
                 Spacer()
@@ -605,7 +652,7 @@ private struct DevModeGuidancePanel: View {
                 Button {
                     dismiss()
                 } label: {
-                    Label("Later", systemImage: "clock")
+                    Label(language.text(.later), systemImage: "clock")
                 }
             }
             .controlSize(.regular)
@@ -618,6 +665,7 @@ private struct DevModeGuidancePanel: View {
 private struct Header: View {
     var profile: EditableMountProfile
     @ObservedObject var model: ZeroFSManagerViewModel
+    var language: AppLanguage
 
     var body: some View {
         HStack(spacing: 14) {
@@ -636,7 +684,7 @@ private struct Header: View {
                         .font(.title2)
                         .fontWeight(.semibold)
                         .lineLimit(1)
-                    StatusBadge(status: profile.status)
+                    StatusBadge(status: profile.status, language: language)
                 }
                 Text(profile.mountPath)
                     .font(.callout)
@@ -650,13 +698,13 @@ private struct Header: View {
             Button {
                 model.requestPerformanceTest(profile.id)
             } label: {
-                Label("Test", systemImage: "speedometer")
+                Label(language.text(.test), systemImage: "speedometer")
             }
             Button {
                 Task { await model.toggleMount(profile.id) }
             } label: {
                 Label(
-                    profile.status == .mounted ? "Unmount" : "Mount",
+                    profile.status == .mounted ? language.text(.unmountAction) : language.text(.mountAction),
                     systemImage: profile.status == .mounted ? "eject.fill" : "play.fill"
                 )
             }
@@ -674,12 +722,12 @@ enum EndpointReachabilityState: Equatable {
     case reachable(String)
     case failed(String)
 
-    var title: String {
+    func title(language: AppLanguage) -> String {
         switch self {
         case .notChecked:
-            "Not checked"
+            language.text(.notChecked)
         case .checking:
-            "Checking"
+            language.text(.checking)
         case .reachable(let note):
             note
         case .failed(let message):
@@ -720,9 +768,10 @@ struct DevModeGuidance: Identifiable, Equatable {
 
 private struct StatusBadge: View {
     var status: EditableMountStatus
+    var language: AppLanguage
 
     var body: some View {
-        Label(status.title, systemImage: status.symbol)
+        Label(status.title(language: language), systemImage: status.symbol)
             .font(.caption)
             .fontWeight(.medium)
             .padding(.horizontal, 8)
@@ -734,15 +783,16 @@ private struct StatusBadge: View {
 
 private struct ValidationList: View {
     var issues: [ValidationIssue]
+    var language: AppLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if issues.isEmpty {
-                Label("Ready", systemImage: "checkmark.circle.fill")
+                Label(language.text(.ready), systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             } else {
                 ForEach(issues, id: \.self) { issue in
-                    Label(issue.description, systemImage: "exclamationmark.triangle.fill")
+                    Label(issue.description(language: language), systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -761,6 +811,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
     @Published var notifications: [MountNotification] = []
     @Published var zeroFSBinary: ZeroFSBinary?
     @Published var endpointReachability: EndpointReachabilityState = .notChecked
+    @Published var language: AppLanguage = .preferred()
 
     private let helper: PrivilegedHelperClient
     private let secrets: SecretStore
@@ -814,7 +865,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
         guard OneActiveProfilePolicy.canAdd(next.mountProfile, to: profiles.map(\.mountProfile)) else {
             recordMountFailure(
                 profileID: selectedProfileID ?? next.id,
-                message: "Version 1 allows one active profile. The UI is structured for multiple mounts so the data model can expand without redesign."
+                message: language.text(.oneActiveProfileMessage)
             )
             return
         }
@@ -843,8 +894,8 @@ final class ZeroFSManagerViewModel: ObservableObject {
         if zeroFSBinary == nil {
             notifications.append(MountNotification(
                 profileID: selectedProfileID ?? (try! ProfileID("lingyuzeng")),
-                title: "ZeroFS Missing",
-                body: "Install ZeroFS with: \(ZeroFSInstallGuidance.recommendedShellCommand)"
+                title: language.text(.zeroFSMissingTitle),
+                body: language.zeroFSMissingInstallBody(command: ZeroFSInstallGuidance.recommendedShellCommand)
             ))
         }
     }
@@ -857,7 +908,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
     func showDevModeGuidance(for id: ProfileID) {
         devModeGuidance = DevModeGuidance(
             profileID: id,
-            message: distributionMode.helperRegistrationUnavailableMessage
+            message: distributionMode.helperRegistrationUnavailableMessage(language: language)
         )
     }
 
@@ -870,13 +921,21 @@ final class ZeroFSManagerViewModel: ObservableObject {
         var profile = profiles[index]
         let issues = validationIssues(for: profile)
         guard issues.isEmpty else {
-            recordMountFailure(profileID: id, message: "Profile validation failed: \(issues.map(\.description).joined(separator: ", "))")
+            recordMountFailure(
+                profileID: id,
+                message: language.profileValidationFailed(issues.map { $0.description(language: language) }),
+                recovery: .general
+            )
             return
         }
 
         do {
             guard let binary = zeroFSBinary else {
-                recordMountFailure(profileID: id, message: "ZeroFS CLI is missing. Install it with: \(ZeroFSInstallGuidance.recommendedShellCommand)")
+                recordMountFailure(
+                    profileID: id,
+                    message: language.zeroFSMissingInstallBody(command: ZeroFSInstallGuidance.recommendedShellCommand),
+                    recovery: .dependency
+                )
                 return
             }
             guard distributionMode.allowsAutomaticHelperRegistration else {
@@ -884,7 +943,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
                     return
                 }
                 showDevModeGuidance(for: id)
-                profile.lastError = "GitHub-style dev mode: use manual CLI/debug launchd testing instead of SMAppService helper registration."
+                profile.lastError = language.text(.githubDevManualTestingLastError)
                 profiles[index] = profile
                 return
             }
@@ -896,7 +955,8 @@ final class ZeroFSManagerViewModel: ObservableObject {
                 guard missingSecrets.isEmpty else {
                     recordMountFailure(
                         profileID: id,
-                        message: "Missing required secrets: \(missingSecrets.joined(separator: ", ")). Enter them before mounting."
+                        message: language.missingRequiredSecrets(missingSecrets),
+                        recovery: .credentials
                     )
                     return
                 }
@@ -938,8 +998,8 @@ final class ZeroFSManagerViewModel: ObservableObject {
             let logs = try await helper.logs(profileID: id, limitBytes: 4096)
             mountFailure = MountFailure(
                 profileID: id,
-                message: mountFailure?.message ?? "Recent helper logs",
-                logExcerpt: logs.isEmpty ? "No recent helper logs were returned." : redacted(logs, for: profile)
+                message: mountFailure?.message ?? language.text(.recentHelperLogs),
+                logExcerpt: logs.isEmpty ? language.text(.noRecentHelperLogs) : redacted(logs, for: profile)
             )
         } catch {
             recordMountFailure(profileID: id, message: redacted(String(describing: error), for: profile))
@@ -973,7 +1033,8 @@ final class ZeroFSManagerViewModel: ObservableObject {
             if selected.autoMount == .afterLogin {
                 recordMountFailure(
                     profileID: selected.id,
-                    message: "ZeroFS CLI is missing. Install it with: \(ZeroFSInstallGuidance.recommendedShellCommand)"
+                    message: language.zeroFSMissingInstallBody(command: ZeroFSInstallGuidance.recommendedShellCommand),
+                    recovery: .dependency
                 )
             }
             return
@@ -984,7 +1045,8 @@ final class ZeroFSManagerViewModel: ObservableObject {
             guard missingSecrets.isEmpty else {
                 recordMountFailure(
                     profileID: selected.id,
-                    message: "Auto mount is missing required secrets: \(missingSecrets.joined(separator: ", ")). Enter them before mounting."
+                    message: language.missingRequiredSecrets(missingSecrets, autoMount: true),
+                    recovery: .credentials
                 )
                 return
             }
@@ -1010,8 +1072,8 @@ final class ZeroFSManagerViewModel: ObservableObject {
             NSPasteboard.general.setString(command, forType: .string)
             notifications.append(MountNotification(
                 profileID: id,
-                title: "CLI Command Copied",
-                body: "Copied a safe template command. Create the env file outside the repo and keep it 0600."
+                title: language.text(.cliCommandCopiedTitle),
+                body: language.text(.cliCommandCopiedBody)
             ))
         } catch {
             recordMountFailure(profileID: id, message: redacted(String(describing: error), for: profile))
@@ -1034,7 +1096,9 @@ final class ZeroFSManagerViewModel: ObservableObject {
             guard NSAppleScript(source: source)?.executeAndReturnError(&error) != nil else {
                 throw DevModeManualTestError.terminalLaunchFailed(error?.description ?? "unknown AppleScript error")
             }
-            notifications.append(MountNotification(profileID: id, title: "Manual Mount Test", body: "Opened Terminal with a local env file. Script output redacts S3 secrets."))
+            notifications.append(MountNotification(profileID: id, title: language.text(.manualMountTestTitle), body: language.text(.manualMountTestBody)))
+        } catch let error as DevModeManualTestError {
+            recordMountFailure(profileID: id, message: error.description(language: language), recovery: error.recovery)
         } catch {
             recordMountFailure(profileID: id, message: redacted(String(describing: error), for: profile))
         }
@@ -1052,7 +1116,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
 
     private func checkEndpointReachability(for profile: EditableMountProfile) async {
         guard let url = URL(string: profile.endpoint), url.scheme == "https" || url.scheme == "http" else {
-            endpointReachability = .failed("Invalid URL")
+            endpointReachability = .failed(language.text(.invalidURL))
             return
         }
         endpointReachability = .checking
@@ -1119,7 +1183,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
                 guard applyLocalMountState(for: id) else {
                     throw HelperClientError.operationFailed(
                         operation: .status,
-                        message: "Local performance test requires an already mounted ZeroFS path.",
+                        message: language.text(.localPerformanceRequiresMounted),
                         logExcerpt: nil
                     )
                 }
@@ -1131,7 +1195,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
             guard status.mount == .mounted else {
                 throw HelperClientError.operationFailed(
                     operation: .status,
-                    message: "Performance test requires the profile to be mounted.",
+                    message: language.text(.performanceRequiresMounted),
                     logExcerpt: status.lastError
                 )
             }
@@ -1164,7 +1228,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
         let runner = PerformanceTestRunner(
             fileManager: .default,
             helper: LocalPerformanceHelper(),
-            metrics: StaticMetricsProvider(metrics: "Metrics are unavailable in GitHub-style dev mode without the privileged helper."),
+            metrics: StaticMetricsProvider(metrics: language.text(.metricsUnavailableDev)),
             byteGenerator: RepeatingByteGenerator(byte: 0x2A)
         )
         return try await runner.run(
@@ -1177,15 +1241,21 @@ final class ZeroFSManagerViewModel: ObservableObject {
 
     private func applyPerformanceReport(_ report: PerformanceReport, to index: Int) {
         profiles[index].status = report.checksumStatus == .pass ? .mounted : .failed
-        profiles[index].lastError = "Performance \(report.checksumStatus.rawValue): wrote \(report.sizeBytes) bytes in \(String(format: "%.2f", report.writeSeconds))s, read in \(String(format: "%.2f", report.readSeconds))s. \(report.capacityNote)"
+        profiles[index].lastError = language.performanceSummary(
+            bytes: report.sizeBytes,
+            writeSeconds: report.writeSeconds,
+            readSeconds: report.readSeconds,
+            capacityNote: report.capacityNote,
+            status: report.checksumStatus.rawValue
+        )
         notifications.append(MountNotification(
             profileID: report.profileID,
-            title: "Performance Test",
+            title: language.text(.performanceTestTitle),
             body: profiles[index].lastError
         ))
     }
 
-    private func recordMountFailure(profileID: ProfileID, message: String, logExcerpt: String? = nil) {
+    private func recordMountFailure(profileID: ProfileID, message: String, logExcerpt: String? = nil, recovery: MountFailureRecovery? = nil) {
         if let index = profiles.firstIndex(where: { $0.id == profileID }) {
             profiles[index].status = .failed
             profiles[index].lastError = message
@@ -1194,9 +1264,9 @@ final class ZeroFSManagerViewModel: ObservableObject {
             profileID: profileID,
             message: message,
             logExcerpt: logExcerpt,
-            recovery: MountFailureRecovery.classify(message: message)
+            recovery: recovery ?? MountFailureRecovery.classify(message: message)
         )
-        notifications.append(MountNotification(profileID: profileID, title: "Mount Failed", body: message))
+        notifications.append(MountNotification(profileID: profileID, title: language.text(.mountFailed), body: message))
     }
 
     private func ensureHelperRegistration() throws {
@@ -1210,13 +1280,13 @@ final class ZeroFSManagerViewModel: ObservableObject {
         case .disabled:
             throw HelperClientError.operationFailed(
                 operation: .installOrUpdate,
-                message: "Privileged helper is disabled. Approve ZeroFS Manager in System Settings > General > Login Items & Extensions.",
+                message: language.text(.helperDisabledMessage),
                 logExcerpt: nil
             )
         case .failed:
             throw HelperClientError.operationFailed(
                 operation: .installOrUpdate,
-                message: "Privileged helper registration failed.",
+                message: language.text(.helperRegistrationFailedMessage),
                 logExcerpt: nil
             )
         }
@@ -1326,7 +1396,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
         } catch {
             notifications.append(MountNotification(
                 profileID: selectedProfileID ?? (try! ProfileID("lingyuzeng")),
-                title: "Profile Save Failed",
+                title: language.text(.profileSaveFailedTitle),
                 body: String(describing: error)
             ))
         }
@@ -1371,13 +1441,26 @@ private enum DevModeManualTestError: Error, CustomStringConvertible {
     case terminalLaunchFailed(String)
 
     var description: String {
+        description(language: .english)
+    }
+
+    var recovery: MountFailureRecovery {
         switch self {
         case .missingSecrets:
-            "Manual mount test requires Access Key, Secret Key, and ZeroFS Password."
+            .credentials
+        case .scriptNotFound, .terminalLaunchFailed:
+            .general
+        }
+    }
+
+    func description(language: AppLanguage) -> String {
+        switch self {
+        case .missingSecrets:
+            language.text(.manualMissingSecrets)
         case .scriptNotFound(let scriptName):
-            "Manual test script not found or not executable: \(scriptName)"
+            language.manualScriptNotFound(scriptName)
         case .terminalLaunchFailed(let message):
-            "Could not open Terminal for manual mount test: \(message)"
+            language.terminalLaunchFailed(message)
         }
     }
 }
@@ -1565,15 +1648,83 @@ struct EditableMountProfile: Identifiable, Equatable {
     }
 }
 
-private extension HelperRegistrationState {
-    var title: String {
+private extension AppDistributionMode {
+    func title(language: AppLanguage) -> String {
         switch self {
-        case .notRegistered: "Not Registered"
-        case .requiresApproval: "Requires Approval"
-        case .enabled: "Enabled"
-        case .disabled: "Disabled"
-        case .notFound: "Not Found"
-        case .failed: "Failed"
+        case .githubDev:
+            language.text(.githubDevBuildTitle)
+        case .officialRelease:
+            language.text(.officialReleaseTitle)
+        }
+    }
+
+    func warningText(language: AppLanguage) -> String {
+        switch self {
+        case .githubDev:
+            language.text(.githubDevWarning)
+        case .officialRelease:
+            language.text(.officialReleaseWarning)
+        }
+    }
+
+    func helperRegistrationUnavailableMessage(language: AppLanguage) -> String {
+        switch self {
+        case .githubDev:
+            switch language {
+            case .english:
+                "Current build is GitHub-style development mode, so the Apple official helper authorization path is disabled. Use the manual CLI or debug launchd path to test real S3 mounts; formal helper authorization will be enabled after Developer ID signing and notarization."
+            case .simplifiedChinese:
+                "当前构建是 GitHub 风格开发模式，因此 Apple 官方 helper 授权路径已禁用。请使用手动 CLI 或 debug launchd 路径测试真实 S3 挂载；正式 helper 授权会在 Developer ID 签名和 notarization 后启用。"
+            case .traditionalChinese:
+                "目前建置是 GitHub 風格開發模式，因此 Apple 官方 helper 授權路徑已停用。請使用手動 CLI 或 debug launchd 路徑測試真實 S3 掛載；正式 helper 授權會在 Developer ID 簽名和 notarization 後啟用。"
+            case .japanese:
+                "現在のビルドは GitHub 形式の開発モードのため、Apple 公式 helper 認可経路は無効です。実際の S3 マウントテストには手動 CLI または debug launchd 経路を使用してください。正式な helper 認可は Developer ID 署名と notarization 後に有効化します。"
+            case .korean:
+                "현재 빌드는 GitHub 스타일 개발 모드이므로 Apple 공식 helper 승인 경로가 비활성화되어 있습니다. 실제 S3 마운트 테스트에는 수동 CLI 또는 debug launchd 경로를 사용하세요. 정식 helper 승인은 Developer ID 서명과 notarization 이후 활성화됩니다."
+            }
+        case .officialRelease:
+            switch language {
+            case .english:
+                "Official release helper registration is unavailable. Verify Developer ID signing, notarization, and Login Items approval."
+            case .simplifiedChinese:
+                "正式发布 helper 注册不可用。请检查 Developer ID 签名、notarization 和登录项批准状态。"
+            case .traditionalChinese:
+                "正式發布 helper 註冊不可用。請檢查 Developer ID 簽名、notarization 和登入項目批准狀態。"
+            case .japanese:
+                "正式リリースの helper 登録を利用できません。Developer ID 署名、notarization、ログイン項目の承認を確認してください。"
+            case .korean:
+                "공식 릴리스 helper 등록을 사용할 수 없습니다. Developer ID 서명, notarization, 로그인 항목 승인을 확인하세요."
+            }
+        }
+    }
+}
+
+private extension ValidationIssue {
+    func description(language: AppLanguage) -> String {
+        switch self {
+        case .invalidProfileID: language.text(.invalidProfileID)
+        case .invalidEndpoint: language.text(.invalidEndpoint)
+        case .invalidBucket: language.text(.invalidBucket)
+        case .invalidPrefix: language.text(.invalidPrefix)
+        case .invalidMountPath: language.text(.invalidMountPath)
+        case .unsafeMountPath: language.text(.unsafeMountPath)
+        case .invalidQuota: language.text(.invalidQuota)
+        case .invalidCache: language.text(.invalidCache)
+        case .invalidPort: language.text(.invalidPort)
+        case .duplicatePorts: language.text(.duplicatePorts)
+        }
+    }
+}
+
+private extension HelperRegistrationState {
+    func title(language: AppLanguage) -> String {
+        switch self {
+        case .notRegistered: language.text(.helperNotRegistered)
+        case .requiresApproval: language.text(.helperRequiresApproval)
+        case .enabled: language.text(.helperEnabled)
+        case .disabled: language.text(.helperDisabled)
+        case .notFound: language.text(.helperNotFound)
+        case .failed: language.text(.helperFailed)
         }
     }
 
@@ -1597,12 +1748,12 @@ private extension HelperRegistrationState {
 }
 
 private extension ZeroFSServiceState {
-    var title: String {
+    func title(language: AppLanguage) -> String {
         switch self {
-        case .running: "Running"
-        case .stopped: "Stopped"
-        case .failed: "Failed"
-        case .unknown: "Unknown"
+        case .running: language.text(.serviceRunning)
+        case .stopped: language.text(.serviceStopped)
+        case .failed: language.text(.serviceFailed)
+        case .unknown: language.text(.serviceUnknown)
         }
     }
 
@@ -1644,12 +1795,12 @@ enum EditableMountStatus: Equatable {
     case testing
     case failed
 
-    var title: String {
+    func title(language: AppLanguage) -> String {
         switch self {
-        case .mounted: "Mounted"
-        case .unmounted: "Unmounted"
-        case .testing: "Testing"
-        case .failed: "Failed"
+        case .mounted: language.text(.mounted)
+        case .unmounted: language.text(.unmounted)
+        case .testing: language.text(.testing)
+        case .failed: language.text(.failed)
         }
     }
 
@@ -1706,16 +1857,16 @@ enum MountFailureRecovery {
         return .general
     }
 
-    var guidance: String {
+    func guidance(language: AppLanguage) -> String {
         switch self {
         case .helper:
-            "If macOS shows the helper as disabled, approve it in System Settings > General > Login Items & Extensions."
+            language.text(.helperGuidance)
         case .credentials:
-            "Enter Access Key, Secret Key, and ZeroFS Password in this profile, then run the mount or manual test again."
+            language.text(.credentialsGuidance)
         case .dependency:
-            "Install ZeroFS, then click Re-detect in the ZeroFS CLI section."
+            language.text(.dependencyGuidance)
         case .general:
-            "Review the message above, fix the profile or runtime state, then try again."
+            language.text(.generalGuidance)
         }
     }
 

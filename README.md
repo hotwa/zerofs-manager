@@ -18,7 +18,13 @@ The default mode is `github-dev`.
 
 ZeroFS is a user-installed external dependency. The app detects and displays the installed `zerofs` version for diagnostics, but it does not pin or bundle a specific ZeroFS binary.
 
+Upstream ZeroFS is [`Barre/ZeroFS`](https://github.com/Barre/ZeroFS), and GitHub reports its license as `AGPL-3.0`. Non-commercial/open-source distribution does not remove AGPL obligations. This project therefore keeps ZeroFS external: GitHub Actions build and publish the GUI only, while users install ZeroFS from upstream.
+
 This repo has been validated with `zerofs 1.2.6`; that is the current test baseline, not a hard runtime dependency. Future compatible ZeroFS versions should be accepted as long as their config format and CLI behavior remain compatible.
+
+## Languages
+
+The macOS app includes an in-window language switcher. The first version supports English, 简体中文, 繁體中文, 日本語, and 한국어 for the main configuration, status, dependency, and mount-test surfaces.
 
 Build the dev package:
 

@@ -768,6 +768,20 @@ struct ZeroFSManagerChecks {
         checks.expect(rootViewSource.contains("LocalPerformanceHelper"), "GitHub-style dev performance tests can run against an existing local mount without helper registration")
         checks.expect(rootViewSource.contains("MountFailureRecovery.classify"), "mount failure dialogs classify recovery actions by failure type")
         checks.expect(rootViewSource.contains("case .credentials"), "missing credential failures avoid helper approval guidance")
+        checks.expect(rootViewSource.contains("@AppStorage(AppLanguage.storageKey)"), "app persists selected UI language")
+        checks.expect(rootViewSource.contains("LanguageMenu(selection:"), "app exposes an in-window language switcher")
+        let localizationSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSManagerUI/AppLocalization.swift"), encoding: .utf8)
+        for languageCase in ["english", "simplifiedChinese", "traditionalChinese", "japanese", "korean"] {
+            checks.expect(localizationSource.contains("case \(languageCase)"), "localization supports \(languageCase)")
+        }
+        for marker in ["简体中文", "繁體中文", "日本語", "한국어"] {
+            checks.expect(localizationSource.contains(marker), "localization includes \(marker) display name")
+        }
+        checks.expect(localizationSource.contains("GitHub-style development build"), "localization keeps English GitHub distribution copy")
+        checks.expect(localizationSource.contains("GitHub 风格开发版"), "localization includes Simplified Chinese GitHub distribution copy")
+        checks.expect(localizationSource.contains("GitHub 風格開發版"), "localization includes Traditional Chinese GitHub distribution copy")
+        checks.expect(localizationSource.contains("GitHub 形式の開発ビルド"), "localization includes Japanese GitHub distribution copy")
+        checks.expect(localizationSource.contains("GitHub 스타일 개발 빌드"), "localization includes Korean GitHub distribution copy")
         let verifyBundleScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/verify-bundle.sh"), encoding: .utf8)
         checks.expect(verifyBundleScript.contains("codesign --verify --deep --strict"), "bundle verification enforces strict codesign")
         let requiredDevScripts = [

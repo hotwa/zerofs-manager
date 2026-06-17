@@ -49,6 +49,8 @@ The script skips if Developer ID or notary credentials are missing. It must not 
 
 The distribution DMG does not include or redistribute ZeroFS. The GUI detects an externally installed `zerofs` binary and shows the upstream install command when missing.
 
+ZeroFS upstream is [`Barre/ZeroFS`](https://github.com/Barre/ZeroFS), reported by GitHub as `AGPL-3.0`. Do not change the GitHub Actions release workflow to vendor ZeroFS source or binaries unless the project intentionally adopts the required AGPL/commercial-license compliance path.
+
 ## Clean-Machine Verification
 
 Before public distribution, test the stapled DMG on a clean macOS account or machine:
