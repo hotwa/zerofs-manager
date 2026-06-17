@@ -67,3 +67,7 @@ For GitHub free distribution, these manual sudo paths are the intended way to en
 ## Official Release
 
 `official-release` is reserved for Developer ID signed, hardened, notarized, stapled distribution with formal `SMAppService` helper registration. The release scripts skip cleanly when Developer ID/notary configuration is unavailable.
+
+## License
+
+ZeroFS Manager is licensed under the Apache License 2.0. ZeroFS itself is not bundled or redistributed by this repository and remains under its upstream license.

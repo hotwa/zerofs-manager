@@ -67,3 +67,7 @@ Scripts/manual-performance-test.sh --mount-point /Volumes/ZeroFS-Test --size 128
 ## 正式发布
 
 `official-release` 预留给 Developer ID 签名、hardened runtime、notarization、stapling 和正式 `SMAppService` helper 注册流程。没有 Developer ID/notary 配置时，正式发布脚本会清晰跳过。
+
+## 许可证
+
+ZeroFS Manager 使用 Apache License 2.0。ZeroFS 本体不会被本仓库打包或再分发，仍遵循其上游许可证。
