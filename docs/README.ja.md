@@ -60,7 +60,7 @@ Apple 署名なしでも、手動 CLI/debug launchd 経路で実際の S3/MinIO/
 Scripts/manual-mount-test.sh --env .env.local --delete-env-on-exit
 Scripts/manual-performance-test.sh --mount-point /Volumes/ZeroFS-Test --size 128M
 Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-exit
-Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id lingyuzeng --mount-point /Volumes/ZeroFS-lingyuzeng
+Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id example-profile --mount-point /Volumes/ZeroFS-Example
 ```
 
 これらの経路は低レベルの開発テスト用であり、正式な macOS helper 認可フローと同等ではありません。

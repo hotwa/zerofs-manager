@@ -752,6 +752,8 @@ struct ZeroFSManagerChecks {
         let appInfoPlistData = try Data(contentsOf: appInfoPlistURL)
         let appInfoPlist = try PropertyListSerialization.propertyList(from: appInfoPlistData, format: nil) as? [String: Any]
         checks.expect(appInfoPlist?["CFBundleIconFile"] as? String == "ZeroFSManager", "app Info.plist declares ZeroFSManager icon")
+        checks.expect(appInfoPlist?["CFBundleShortVersionString"] as? String == "0.1.2", "app Info.plist version matches current dev package")
+        checks.expect(appInfoPlist?["CFBundleVersion"] as? String == "3", "app Info.plist build number is bumped")
         checks.expect(
             FileManager.default.fileExists(atPath: projectRoot.appendingPathComponent("Resources/App/ZeroFSManager.icns").path),
             "app icon resource exists"
@@ -774,7 +776,9 @@ struct ZeroFSManagerChecks {
         checks.expect(rootViewSource.contains("PrivilegedMountPathPolicy"), "GitHub-style dev sudo LaunchDaemon path enforces privileged mount path policy")
         checks.expect(rootViewSource.contains("writeLaunchDaemonEnv"), "GitHub-style dev UI writes profile launchd env outside the repo")
         checks.expect(rootViewSource.contains("manual-install-profile-launchdaemon.sh"), "GitHub-style dev UI calls the sudo profile launchd installer")
-        checks.expect(rootViewSource.contains("zerofs-manager-public/Scripts"), "GitHub-style dev UI can find scripts from the public repo checkout")
+        checks.expect(rootViewSource.contains("ZEROFS_MANAGER_SCRIPT_DIR"), "local dev script lookup uses an explicit environment override")
+        checks.expect(!rootViewSource.contains("/Users/lingyuzeng/project/zerofs-manager"), "app runtime does not hardcode developer machine script paths")
+        checks.expect(!rootViewSource.contains("EditableMountProfile.lingyuzeng()"), "first launch does not seed a personal object-store profile")
         checks.expect(rootViewSource.contains("MountFailureRecovery.classify"), "mount failure dialogs classify recovery actions by failure type")
         checks.expect(rootViewSource.contains("case .credentials"), "missing credential failures avoid helper approval guidance")
         checks.expect(rootViewSource.contains("@AppStorage(AppLanguage.storageKey)"), "app persists selected UI language")
@@ -852,6 +856,7 @@ struct ZeroFSManagerChecks {
         checks.expect(githubDevPackageScript.contains("GitHub-style development build"), "github-dev package README warns about dev distribution")
         checks.expect(githubDevPackageScript.contains("ZeroFS-Manager-dev-adhoc.dmg"), "github-dev package emits dev adhoc DMG")
         checks.expect(githubDevPackageScript.contains("LICENSE.txt"), "github-dev DMG includes Apache license text")
+        checks.expect(!githubDevPackageScript.contains("cp -R \"$PROJECT_ROOT/Scripts\""), "github-dev DMG does not expose the full development Scripts directory")
         let localDMGScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/package-dmg.sh"), encoding: .utf8)
         checks.expect(localDMGScript.contains("LICENSE.txt"), "local DMG includes Apache license text")
         let debugInstallScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-install-launchdaemon-debug.sh"), encoding: .utf8)

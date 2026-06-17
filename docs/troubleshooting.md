@@ -47,7 +47,7 @@ Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-
 To remove the persistent profile daemon:
 
 ```sh
-Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id lingyuzeng --mount-point /Volumes/ZeroFS-lingyuzeng
+Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id example-profile --mount-point /Volumes/ZeroFS-Example
 ```
 
 ## Helper Requires Approval

@@ -60,7 +60,7 @@ swift run ZeroFSManagerChecks
 Scripts/manual-mount-test.sh --env .env.local --delete-env-on-exit
 Scripts/manual-performance-test.sh --mount-point /Volumes/ZeroFS-Test --size 128M
 Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-exit
-Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id lingyuzeng --mount-point /Volumes/ZeroFS-lingyuzeng
+Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id example-profile --mount-point /Volumes/ZeroFS-Example
 ```
 
 這些路徑用於底層開發測試，不等同於正式 macOS helper 授權流程。

@@ -844,7 +844,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
             UserDefaults.standard.set(true, forKey: migrationKey)
         }
         let initialProfiles = storedProfiles.isEmpty
-            ? [EditableMountProfile.lingyuzeng()]
+            ? [EditableMountProfile.empty()]
             : storedProfiles.map(EditableMountProfile.init(mountProfile:))
         self.profiles = initialProfiles
         self.selectedProfileID = initialProfiles.first?.id
@@ -898,7 +898,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
         zeroFSBinary = ZeroFSBinaryLocator().locate()
         if zeroFSBinary == nil {
             notifications.append(MountNotification(
-                profileID: selectedProfileID ?? (try! ProfileID("lingyuzeng")),
+                profileID: selectedProfileID ?? (try! ProfileID("new-profile")),
                 title: language.text(.zeroFSMissingTitle),
                 body: language.zeroFSMissingInstallBody(command: ZeroFSInstallGuidance.recommendedShellCommand)
             ))
@@ -1181,8 +1181,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
 
     func openTroubleshooting() {
         let candidates = [
-            Bundle.main.resourceURL?.appendingPathComponent("docs/troubleshooting.md"),
-            URL(fileURLWithPath: "/Users/lingyuzeng/project/zerofs-manager/docs/troubleshooting.md")
+            Bundle.main.resourceURL?.appendingPathComponent("docs/troubleshooting.md")
         ].compactMap { $0 }
         if let url = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
             NSWorkspace.shared.open(url)
@@ -1491,11 +1490,13 @@ final class ZeroFSManagerViewModel: ObservableObject {
     }
 
     private func manualScriptURL(named scriptName: String) throws -> URL {
-        let candidates = [
-            Bundle.main.resourceURL?.appendingPathComponent("Scripts/\(scriptName)"),
-            URL(fileURLWithPath: "/Users/lingyuzeng/project/zerofs-manager-public/Scripts/\(scriptName)"),
-            URL(fileURLWithPath: "/Users/lingyuzeng/project/zerofs-manager/Scripts/\(scriptName)")
+        var candidates = [
+            Bundle.main.resourceURL?.appendingPathComponent("Scripts/\(scriptName)")
         ].compactMap { $0 }
+        if let scriptDirectory = ProcessInfo.processInfo.environment["ZEROFS_MANAGER_SCRIPT_DIR"],
+           !scriptDirectory.isEmpty {
+            candidates.append(URL(fileURLWithPath: scriptDirectory, isDirectory: true).appendingPathComponent(scriptName))
+        }
         guard let scriptURL = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
             throw DevModeManualTestError.scriptNotFound(scriptName)
         }
@@ -1520,7 +1521,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
             try profileStore.save(profiles.map(\.mountProfile))
         } catch {
             notifications.append(MountNotification(
-                profileID: selectedProfileID ?? (try! ProfileID("lingyuzeng")),
+                profileID: selectedProfileID ?? (try! ProfileID("new-profile")),
                 title: language.text(.profileSaveFailedTitle),
                 body: String(describing: error)
             ))
@@ -1715,33 +1716,6 @@ struct EditableMountProfile: Identifiable, Equatable {
             ports: PortSet(nfs: nfsPort, rpc: rpcPort, metrics: metricsPort),
             autoMount: autoMount,
             performanceTestSize: .megabytes(Int(performanceTestMegabytes))
-        )
-    }
-
-    static func lingyuzeng() -> EditableMountProfile {
-        EditableMountProfile(
-            id: try! ProfileID("lingyuzeng"),
-            displayName: "lingyuzeng",
-            endpoint: "https://amiaps3.hzau.edu.cn",
-            bucket: "user-123456789",
-            prefix: "lingyuzeng",
-            mountPath: "/Volumes/ZeroFS-lingyuzeng",
-            accessKey: "",
-            secretKey: "",
-            encryptionPassword: "",
-            quotaGigabytes: 1024,
-            diskCacheGigabytes: 10,
-            memoryCacheGigabytes: 0.5,
-            performanceTestMegabytes: Double(ProductDefaults.defaultPerformanceTestMegabytes),
-            nfsPort: 2049,
-            rpcPort: 17000,
-            metricsPort: 9091,
-            autoMount: ProductDefaults.firstRunAutoMountPolicy,
-            helperRegistration: .notRegistered,
-            serviceState: .unknown,
-            metricsReachable: false,
-            lastError: "",
-            status: .unmounted
         )
     }
 

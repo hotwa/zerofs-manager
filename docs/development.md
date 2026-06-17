@@ -125,7 +125,7 @@ For persistent auto-mount without Developer ID, use the profile daemon scripts:
 
 ```sh
 Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-exit
-Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id lingyuzeng --mount-point /Volumes/ZeroFS-lingyuzeng
+Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id example-profile --mount-point /Volumes/ZeroFS-Example
 ```
 
 The best-practice layout is a stable pair of plist files under `/Library/LaunchDaemons` plus dynamic profile config under `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>`. The runtime plist runs `run-zerofs.sh`; the mount plist runs `mount-zerofs.sh`. All user-adjustable values such as endpoint, bucket, prefix, mount directory, ports, cache, quota, and credentials are written to `zerofs.toml` and root-only `zerofs.env`. After a profile parameter changes, the app opens Terminal for the sudo installer again, which rewrites config/env, bootouts existing jobs, bootstraps them, and kickstarts the matching profile.

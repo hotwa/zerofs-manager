@@ -60,7 +60,7 @@ Apple 서명 없이도 수동 CLI/debug launchd 경로로 실제 S3/MinIO/R2 마
 Scripts/manual-mount-test.sh --env .env.local --delete-env-on-exit
 Scripts/manual-performance-test.sh --mount-point /Volumes/ZeroFS-Test --size 128M
 Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-exit
-Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id lingyuzeng --mount-point /Volumes/ZeroFS-lingyuzeng
+Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id example-profile --mount-point /Volumes/ZeroFS-Example
 ```
 
 이 경로는 저수준 개발 테스트용이며, 공식 macOS helper 승인 흐름과 동일하지 않습니다.

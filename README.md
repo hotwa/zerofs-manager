@@ -60,7 +60,7 @@ Use manual CLI/debug launchd paths to validate real S3/MinIO/R2 mounting, read/w
 Scripts/manual-mount-test.sh --env .env.local --delete-env-on-exit
 Scripts/manual-performance-test.sh --mount-point /Volumes/ZeroFS-Test --size 128M
 Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-exit
-Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id lingyuzeng --mount-point /Volumes/ZeroFS-lingyuzeng
+Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id example-profile --mount-point /Volumes/ZeroFS-Example
 ```
 
 These paths are for lower-level development testing and are not equivalent to official macOS helper authorization.

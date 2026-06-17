@@ -58,13 +58,15 @@ rm -rf "$STAGING"
 mkdir -p "$STAGING"
 cp -R "$APP_PATH" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
-cp -R "$PROJECT_ROOT/Scripts" "$STAGING/Scripts"
 cp "$PROJECT_ROOT/LICENSE" "$STAGING/LICENSE.txt"
 cat > "$STAGING/README-GITHUB-DEV.txt" <<'README'
 This is a GitHub-style development build.
 It is not signed with Apple Developer ID.
 macOS Gatekeeper may block it.
 For development/testing only.
+
+The app includes reviewed helper scripts inside the app bundle and opens them
+from the UI when a technical user chooses manual sudo workflows.
 
 Technical users can remove quarantine for local development testing:
 
