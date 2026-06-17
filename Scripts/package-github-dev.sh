@@ -59,6 +59,7 @@ mkdir -p "$STAGING"
 cp -R "$APP_PATH" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 cp -R "$PROJECT_ROOT/Scripts" "$STAGING/Scripts"
+cp "$PROJECT_ROOT/LICENSE" "$STAGING/LICENSE.txt"
 cat > "$STAGING/README-GITHUB-DEV.txt" <<'README'
 This is a GitHub-style development build.
 It is not signed with Apple Developer ID.
@@ -73,6 +74,7 @@ open "/Applications/ZeroFS Manager.app"
 This is not official user-facing installation guidance and does not replace
 Developer ID signing, notarization, stapling, or SMAppService approval testing.
 ZeroFS itself is not bundled; install it separately.
+ZeroFS Manager is licensed under Apache License 2.0; see LICENSE.txt.
 README
 
 hdiutil create \

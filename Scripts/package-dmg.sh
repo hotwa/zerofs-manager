@@ -52,11 +52,13 @@ mkdir -p "$STAGING/.background"
 cp -R "$APP_PATH" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 cp "$DMG_BACKGROUND" "$STAGING/.background/background.png"
+cp "$PROJECT_ROOT/LICENSE" "$STAGING/LICENSE.txt"
 cat > "$STAGING/LOCAL_NOT_NOTARIZED.txt" <<'MARKER'
 This DMG is a local development artifact.
 It is not notarized and is not intended for public distribution.
 It contains the GUI only. ZeroFS is an external dependency that users install separately.
 For release distribution, use Scripts/sign-notarize-staple.sh with Developer ID credentials.
+ZeroFS Manager is licensed under Apache License 2.0; see LICENSE.txt.
 MARKER
 
 rm -f "$DMG_PATH" "$RW_DMG"

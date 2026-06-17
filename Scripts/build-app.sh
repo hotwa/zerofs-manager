@@ -74,6 +74,7 @@ for script in manual-mount-test.sh manual-performance-test.sh manual-install-lau
   fi
 done
 cp "$PROJECT_ROOT/docs/troubleshooting.md" "$APP_PATH/Contents/Resources/docs/troubleshooting.md"
+cp "$PROJECT_ROOT/LICENSE" "$APP_PATH/Contents/Resources/LICENSE.txt"
 
 printf "APPL????" > "$APP_PATH/Contents/PkgInfo"
 
