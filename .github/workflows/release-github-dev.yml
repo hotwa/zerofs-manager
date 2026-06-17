@@ -21,9 +21,11 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
-      - name: Run project checks
+      - name: Run release checks
         run: |
           swift build
+          swift test --enable-xctest
+          swift run ZeroFSProbeTests
           swift run ZeroFSManagerChecks
 
       - name: Build ad-hoc DMG and ZIP
@@ -32,6 +34,11 @@ jobs:
       - name: Inspect ad-hoc signature
         run: Scripts/inspect-signature.sh "dist/ZeroFS Manager.app"
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          shasum -a 256 ZeroFS-Manager-dev-adhoc.dmg ZeroFS-Manager-dev-adhoc.zip > SHA256SUMS
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -39,6 +46,7 @@ jobs:
           path: |
             dist/ZeroFS-Manager-dev-adhoc.dmg
             dist/ZeroFS-Manager-dev-adhoc.zip
+            dist/SHA256SUMS
           if-no-files-found: error
 
       - name: Publish GitHub Release assets
@@ -49,3 +57,4 @@ jobs:
           files: |
             dist/ZeroFS-Manager-dev-adhoc.dmg
             dist/ZeroFS-Manager-dev-adhoc.zip
+            dist/SHA256SUMS

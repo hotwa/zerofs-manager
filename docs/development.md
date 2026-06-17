@@ -37,12 +37,18 @@ Scripts/verify-local.sh
 This runs:
 
 - `swift build`
+- `swift test --enable-xctest`
+- `swift run ZeroFSProbeTests`
 - `swift run ZeroFSManagerChecks`
 - app bundle assembly into `dist/ZeroFS Manager.app`
 - bundle layout and strict local code-signature verification
-- `openspec validate build-distributable-zerofs-manager --strict`
+- `openspec validate build-distributable-zerofs-manager --strict` when `openspec` is installed
 
-This machine has Apple Command Line Tools but not the full Xcode XCTest runtime, so the scaffold uses `ZeroFSManagerChecks` as the local verification executable.
+Full Xcode is required for local XCTest execution. If `xcode-select` points at Command Line Tools, `Scripts/verify-local.sh` will use `/Applications/Xcode.app/Contents/Developer` when it exists. After installing Xcode, accept the license once with:
+
+```sh
+sudo xcodebuild -license accept
+```
 
 ## Local App Bundle
 

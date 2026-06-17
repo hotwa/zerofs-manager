@@ -40,6 +40,10 @@ echo "SwiftPM tests, probe regression tests, and project checks passed."
 
 "$PROJECT_ROOT/Scripts/build-app.sh"
 "$PROJECT_ROOT/Scripts/verify-bundle.sh" "$PROJECT_ROOT/dist/ZeroFS Manager.app"
-openspec validate build-distributable-zerofs-manager --strict
+if command -v openspec >/dev/null 2>&1; then
+  openspec validate build-distributable-zerofs-manager --strict
+else
+  echo "openspec not found; skipping OpenSpec validation."
+fi
 
 echo "Local verification passed"

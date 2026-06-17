@@ -49,6 +49,9 @@ struct ZeroFSManagerChecks {
         checks.expect(storageIssues.contains(.invalidEndpoint), "invalid endpoint is rejected")
         checks.expect(storageIssues.contains(.invalidBucket), "invalid bucket is rejected")
         checks.expect(storageIssues.contains(.invalidPrefix), "invalid prefix is rejected")
+        var invalidRegion = try MountProfile.example()
+        invalidRegion.region = "bad region"
+        checks.expect(ProfileValidator.validate(invalidRegion).contains(.invalidRegion), "invalid region is rejected")
 
         var injectedPrefix = try MountProfile.example()
         injectedPrefix.prefix = "safe\"\n[aws]\nendpoint = \"evil"
@@ -396,6 +399,7 @@ struct ZeroFSManagerChecks {
         let profile = try MountProfile.example()
         let fileSet = try HelperRuntimeGenerator.makeFileSet(profile: profile)
         checks.expect(fileSet.configContents.contains("s3.example.invalid"), "helper runtime config contains endpoint")
+        checks.expect(fileSet.configContents.contains("region = \"us-east-1\""), "helper runtime config contains S3 region")
         checks.expect(!fileSet.configContents.contains("secret-value"), "helper runtime config contains no secret")
 
         var unsafeProfile = profile
@@ -857,6 +861,23 @@ struct ZeroFSManagerChecks {
         checks.expect(loadedSettings[profileID]?.manualSizeBytes == 512 * 1_048_576, "probe settings persist manual probe size")
         checks.expect(loadedSettings[profileID]?.lastScheduledProbeAt == scheduledAt, "probe settings persist last scheduled probe timestamp")
         checks.expect(loadedSettings[profileID]?.lastManualProbeAt == manualAt, "probe settings persist last manual probe timestamp")
+        let legacyProfileJSON = """
+        {
+          "id": "legacy-profile",
+          "displayName": "Legacy Profile",
+          "endpoint": "https://s3.example.invalid",
+          "bucket": "example-bucket",
+          "prefix": "",
+          "mountPath": { "rawValue": "/Volumes/ZeroFS-Legacy" },
+          "quota": { "gigabytes": 1 },
+          "cache": { "diskGigabytes": 0, "memoryGigabytes": 0 },
+          "ports": { "nfs": 2049, "rpc": 17000, "metrics": 9091 },
+          "autoMount": "disabled",
+          "performanceTestSize": { "megabytes": { "_0": 1 } }
+        }
+        """
+        let decodedLegacyProfile = try JSONDecoder().decode(MountProfile.self, from: Data(legacyProfileJSON.utf8))
+        checks.expect(decodedLegacyProfile.region == "us-east-1", "legacy profiles default missing region to us-east-1")
 
         let retention = ProbeResultRetention(maxRecordsPerProfile: 3, maxAgeSeconds: 60 * 60 * 24 * 30)
         let resultStore = FileProbeResultStore(directoryURL: storeRoot.appendingPathComponent("ProbeResults"), retention: retention)
@@ -903,6 +924,10 @@ struct ZeroFSManagerChecks {
         checks.expect(
             FileManager.default.fileExists(atPath: backgroundStore.fileURL(for: profileID).path),
             "background probe result store writes nested per-profile result files"
+        )
+        checks.expect(
+            try backgroundStore.load(profileID: profileID, persistPrunedResults: false).count == 1,
+            "background probe result store can load without pruning root-owned files"
         )
 
         let lockDirectory = storeRoot.appendingPathComponent("probe.lock", isDirectory: true)
@@ -987,8 +1012,8 @@ struct ZeroFSManagerChecks {
         let appInfoPlistData = try Data(contentsOf: appInfoPlistURL)
         let appInfoPlist = try PropertyListSerialization.propertyList(from: appInfoPlistData, format: nil) as? [String: Any]
         checks.expect(appInfoPlist?["CFBundleIconFile"] as? String == "ZeroFSManager", "app Info.plist declares ZeroFSManager icon")
-        checks.expect(appInfoPlist?["CFBundleShortVersionString"] as? String == "0.1.2", "app Info.plist version matches current dev package")
-        checks.expect(appInfoPlist?["CFBundleVersion"] as? String == "3", "app Info.plist build number is bumped")
+        checks.expect(appInfoPlist?["CFBundleShortVersionString"] as? String == "0.1.4", "app Info.plist version matches current dev package")
+        checks.expect(appInfoPlist?["CFBundleVersion"] as? String == "5", "app Info.plist build number is bumped")
         checks.expect(
             FileManager.default.fileExists(atPath: projectRoot.appendingPathComponent("Resources/App/ZeroFSManager.icns").path),
             "app icon resource exists"
@@ -1009,6 +1034,10 @@ struct ZeroFSManagerChecks {
         checks.expect(verifyLocalScript.contains("swift test --enable-xctest"), "local verification forces XCTest execution instead of build-only SwiftPM tests")
         let ciWorkflow = try String(contentsOf: projectRoot.appendingPathComponent(".github/workflows/ci.yml"), encoding: .utf8)
         checks.expect(ciWorkflow.contains("swift test --enable-xctest"), "CI forces XCTest execution")
+        let releaseWorkflow = try String(contentsOf: projectRoot.appendingPathComponent(".github/workflows/release-github-dev.yml"), encoding: .utf8)
+        checks.expect(releaseWorkflow.contains("swift test --enable-xctest"), "release workflow forces XCTest execution")
+        checks.expect(releaseWorkflow.contains("swift run ZeroFSProbeTests"), "release workflow runs probe regression tests")
+        checks.expect(releaseWorkflow.contains("SHA256SUMS"), "release workflow uploads checksums for DMG and ZIP")
         let packageSource = try String(contentsOf: projectRoot.appendingPathComponent("Package.swift"), encoding: .utf8)
         checks.expect(packageSource.contains(".executable(name: \"ZeroFSProbeTool\""), "Swift package exposes ZeroFSProbeTool executable product")
         checks.expect(packageSource.contains("name: \"ZeroFSProbeTool\""), "Swift package builds ZeroFSProbeTool target")
@@ -1027,10 +1056,18 @@ struct ZeroFSManagerChecks {
         checks.expect(!probeToolSource.contains("case .skipped:\n                terminate(75)"), "ZeroFSProbeTool does not exit directly while holding a probe lock after skipped runs")
         let reliabilityProbeSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSPerformance/ReliabilityProbes.swift"), encoding: .utf8)
         checks.expect(reliabilityProbeSource.contains("describeError(error)"), "reliability probe failures preserve actionable command output")
-        checks.expect(reliabilityProbeSource.contains("Darwin.lockf"), "probe locks use kernel file locks that release after process crashes")
+        checks.expect(reliabilityProbeSource.contains("Darwin.fcntl"), "probe locks use kernel file locks that release after process crashes")
+        checks.expect(reliabilityProbeSource.contains("O_NOFOLLOW"), "probe locks do not follow symlink lock paths")
+        checks.expect(!reliabilityProbeSource.contains("setAttributes([.posixPermissions: 0o666], ofItemAtPath: lockDirectory.path)"), "probe locks do not chmod existing lock paths")
+        checks.expect(!reliabilityProbeSource.contains("canWriteMetadata"), "probe locks do not truncate existing user-provided lock files")
         checks.expect(reliabilityProbeSource.contains("ProbeRunLockRegistry"), "probe locks also block duplicate in-process acquisition")
         checks.expect(reliabilityProbeSource.contains("ProbeCleanupDiagnostics"), "probe diagnostics expose cleanup as structured data for UI localization")
         let rootViewSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSManagerUI/ZeroFSManagerRootView.swift"), encoding: .utf8)
+        checks.expect(rootViewSource.contains("TextField(language.text(.region)"), "UI exposes S3 region configuration")
+        checks.expect(rootViewSource.contains("S3_REGION=\\(shellQuote(profile.region))"), "sudo env flow writes the configured S3 region")
+        checks.expect(rootViewSource.contains("sensitiveEnvURL"), "Terminal sudo workflows clean up sensitive env files if launch fails")
+        checks.expect(rootViewSource.contains("trap \\(shellQuote(cleanup)) EXIT INT TERM HUP"), "Terminal sudo workflows install an env cleanup trap")
+        checks.expect(rootViewSource.contains("persistPrunedResults: false"), "UI reads root-owned background probe results without pruning writes")
         checks.expect(rootViewSource.contains("--env /path/to/.env.local --delete-env-on-exit"), "copy CLI command uses a safe env template instead of writing secrets")
         checks.expect(rootViewSource.contains("LocalPerformanceHelper"), "GitHub-style dev performance tests can run against an existing local mount without helper registration")
         checks.expect(rootViewSource.contains("ReliabilityProbeSection"), "UI includes reliability probe controls")
@@ -1096,8 +1133,17 @@ struct ZeroFSManagerChecks {
         checks.expect(localizationSource.contains("大きいプローブを実行しますか？"), "localization includes Japanese large probe confirmation copy")
         checks.expect(localizationSource.contains("안정성 검사"), "localization includes Korean reliability probe copy")
         checks.expect(localizationSource.contains("큰 검사 실행?"), "localization includes Korean large probe confirmation copy")
+        let readmeSource = try String(contentsOf: projectRoot.appendingPathComponent("README.md"), encoding: .utf8)
+        let developmentDocsSource = try String(contentsOf: projectRoot.appendingPathComponent("docs/development.md"), encoding: .utf8)
+        checks.expect(readmeSource.contains("v0.1.4"), "README release instructions reference the current dev tag")
+        checks.expect(readmeSource.contains("docs/release-checklist.md"), "README links the release checklist")
+        checks.expect(FileManager.default.fileExists(atPath: projectRoot.appendingPathComponent("docs/release-checklist.md").path), "release checklist doc exists")
+        checks.expect(developmentDocsSource.contains("Full Xcode is required"), "development docs explain the full Xcode XCTest requirement")
+        checks.expect(!developmentDocsSource.contains("does not execute XCTest"), "development docs do not keep stale CLT-only XCTest guidance")
         let verifyBundleScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/verify-bundle.sh"), encoding: .utf8)
         checks.expect(verifyBundleScript.contains("codesign --verify --deep --strict"), "bundle verification enforces strict codesign")
+        checks.expect(verifyBundleScript.contains("AKIA[0-9A-Z]{16}"), "bundle verification scans for AWS access keys")
+        checks.expect(verifyBundleScript.contains("ZEROFS_PASSWORD"), "bundle verification scans for ZeroFS password literals")
         let requiredDevScripts = [
             "sign-app-adhoc.sh",
             "inspect-signature.sh",
@@ -1175,7 +1221,9 @@ struct ZeroFSManagerChecks {
         checks.expect(githubDevPackageScript.contains("VERIFY_CODESIGN=0"), "github-dev unsigned package mode bypasses strict bundle codesign only when requested")
         checks.expect(githubDevPackageScript.contains("GitHub-style development build"), "github-dev package README warns about dev distribution")
         checks.expect(githubDevPackageScript.contains("ZeroFS-Manager-dev-adhoc.dmg"), "github-dev package emits dev adhoc DMG")
+        checks.expect(githubDevPackageScript.contains("SHA256SUMS"), "github-dev package emits checksums")
         checks.expect(githubDevPackageScript.contains("LICENSE.txt"), "github-dev DMG includes Apache license text")
+        checks.expect(githubDevPackageScript.contains("First-run quickstart"), "github-dev DMG README includes first-run quickstart")
         checks.expect(githubDevPackageScript.contains("Do not run the app directly from this mounted DMG"), "github-dev DMG README tells users to install before launching")
         checks.expect(!githubDevPackageScript.contains("cp -R \"$PROJECT_ROOT/Scripts\""), "github-dev DMG does not expose the full development Scripts directory")
         let developmentDocs = try String(contentsOf: projectRoot.appendingPathComponent("docs/development.md"), encoding: .utf8)

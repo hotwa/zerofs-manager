@@ -349,6 +349,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .objectStorage: "Object Storage",
             .displayName: "Display Name",
             .endpoint: "Endpoint",
+            .region: "Region",
             .bucket: "Bucket",
             .prefix: "Prefix",
             .accessKey: "Access Key",
@@ -466,6 +467,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .failed: "Failed",
             .invalidProfileID: "Invalid profile ID",
             .invalidEndpoint: "Invalid endpoint",
+            .invalidRegion: "Invalid region",
             .invalidBucket: "Invalid bucket",
             .invalidPrefix: "Invalid prefix",
             .invalidMountPath: "Invalid mount path",
@@ -513,6 +515,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .objectStorage: "对象存储",
             .displayName: "显示名称",
             .endpoint: "Endpoint",
+            .region: "Region",
             .bucket: "Bucket",
             .prefix: "Prefix",
             .accessKey: "Access Key",
@@ -630,6 +633,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .failed: "失败",
             .invalidProfileID: "Profile ID 无效",
             .invalidEndpoint: "Endpoint 无效",
+            .invalidRegion: "Region 无效",
             .invalidBucket: "Bucket 无效",
             .invalidPrefix: "Prefix 无效",
             .invalidMountPath: "挂载路径无效",
@@ -677,6 +681,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .objectStorage: "物件儲存",
             .displayName: "顯示名稱",
             .endpoint: "Endpoint",
+            .region: "Region",
             .bucket: "Bucket",
             .prefix: "Prefix",
             .accessKey: "Access Key",
@@ -794,6 +799,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .failed: "失敗",
             .invalidProfileID: "Profile ID 無效",
             .invalidEndpoint: "Endpoint 無效",
+            .invalidRegion: "Region 無效",
             .invalidBucket: "Bucket 無效",
             .invalidPrefix: "Prefix 無效",
             .invalidMountPath: "掛載路徑無效",
@@ -841,6 +847,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .objectStorage: "オブジェクトストレージ",
             .displayName: "表示名",
             .endpoint: "Endpoint",
+            .region: "Region",
             .bucket: "Bucket",
             .prefix: "Prefix",
             .accessKey: "Access Key",
@@ -958,6 +965,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .failed: "失敗",
             .invalidProfileID: "Profile ID が無効です",
             .invalidEndpoint: "Endpoint が無効です",
+            .invalidRegion: "Region が無効です",
             .invalidBucket: "Bucket が無効です",
             .invalidPrefix: "Prefix が無効です",
             .invalidMountPath: "マウントパスが無効です",
@@ -1005,6 +1013,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .objectStorage: "오브젝트 스토리지",
             .displayName: "표시 이름",
             .endpoint: "Endpoint",
+            .region: "Region",
             .bucket: "Bucket",
             .prefix: "Prefix",
             .accessKey: "Access Key",
@@ -1122,6 +1131,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .failed: "실패",
             .invalidProfileID: "잘못된 Profile ID",
             .invalidEndpoint: "잘못된 Endpoint",
+            .invalidRegion: "잘못된 Region",
             .invalidBucket: "잘못된 Bucket",
             .invalidPrefix: "잘못된 Prefix",
             .invalidMountPath: "잘못된 마운트 경로",
@@ -1172,6 +1182,7 @@ enum AppTextKey: String, CaseIterable {
     case objectStorage
     case displayName
     case endpoint
+    case region
     case bucket
     case prefix
     case accessKey
@@ -1289,6 +1300,7 @@ enum AppTextKey: String, CaseIterable {
     case failed
     case invalidProfileID
     case invalidEndpoint
+    case invalidRegion
     case invalidBucket
     case invalidPrefix
     case invalidMountPath

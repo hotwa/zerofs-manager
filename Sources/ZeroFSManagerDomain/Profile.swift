@@ -101,6 +101,7 @@ public struct MountProfile: Codable, Equatable, Sendable {
     public var id: ProfileID
     public var displayName: String
     public var endpoint: String
+    public var region: String
     public var bucket: String
     public var prefix: String
     public var mountPath: MountPath
@@ -114,6 +115,7 @@ public struct MountProfile: Codable, Equatable, Sendable {
         id: ProfileID,
         displayName: String,
         endpoint: String,
+        region: String = "us-east-1",
         bucket: String,
         prefix: String,
         mountPath: MountPath,
@@ -126,6 +128,7 @@ public struct MountProfile: Codable, Equatable, Sendable {
         self.id = id
         self.displayName = displayName
         self.endpoint = endpoint
+        self.region = region
         self.bucket = bucket
         self.prefix = prefix
         self.mountPath = mountPath
@@ -134,5 +137,36 @@ public struct MountProfile: Codable, Equatable, Sendable {
         self.ports = ports
         self.autoMount = autoMount
         self.performanceTestSize = performanceTestSize
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case displayName
+        case endpoint
+        case region
+        case bucket
+        case prefix
+        case mountPath
+        case quota
+        case cache
+        case ports
+        case autoMount
+        case performanceTestSize
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(ProfileID.self, forKey: .id)
+        self.displayName = try container.decode(String.self, forKey: .displayName)
+        self.endpoint = try container.decode(String.self, forKey: .endpoint)
+        self.region = try container.decodeIfPresent(String.self, forKey: .region) ?? "us-east-1"
+        self.bucket = try container.decode(String.self, forKey: .bucket)
+        self.prefix = try container.decode(String.self, forKey: .prefix)
+        self.mountPath = try container.decode(MountPath.self, forKey: .mountPath)
+        self.quota = try container.decode(Quota.self, forKey: .quota)
+        self.cache = try container.decode(CacheSettings.self, forKey: .cache)
+        self.ports = try container.decode(PortSet.self, forKey: .ports)
+        self.autoMount = try container.decode(AutoMountPolicy.self, forKey: .autoMount)
+        self.performanceTestSize = try container.decode(PerformanceTestSize.self, forKey: .performanceTestSize)
     }
 }

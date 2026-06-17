@@ -37,13 +37,12 @@ Scripts/inspect-signature.sh "dist/ZeroFS Manager.app"
 本地检查：
 
 ```sh
-swift build
-swift run ZeroFSManagerChecks
+Scripts/verify-local.sh
 ```
 
 ## GitHub Releases
 
-仓库包含 GitHub Actions 发布流程。推送 `v0.1.2` 这样的 tag 后，会构建 ad-hoc GitHub 包并上传：
+仓库包含 GitHub Actions 发布流程。推送 `v0.1.4` 这样的 tag 后，会构建 ad-hoc GitHub 包并上传：
 
 - `ZeroFS-Manager-dev-adhoc.dmg`
 - `ZeroFS-Manager-dev-adhoc.zip`

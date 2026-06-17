@@ -71,13 +71,22 @@ Install:
 2. Do not run the app directly from this mounted DMG.
 3. Install external ZeroFS separately, then launch the app from /Applications.
 
+First-run quickstart:
+
+1. If Gatekeeper blocks this ad-hoc GitHub build, remove quarantine for testing:
+
+   xattr -dr com.apple.quarantine "/Applications/ZeroFS Manager.app"
+
+2. Open "/Applications/ZeroFS Manager.app".
+3. Confirm ZeroFS CLI is detected, or install it from the upstream command shown in the app.
+4. Fill Display Name, Endpoint, Region, Bucket, Prefix, Access Key, Secret Key, ZeroFS Password, and Mount Directory.
+5. Click "Apply & Restart LaunchDaemon" when you want launchd-backed startup/mount behavior, then approve sudo in Terminal.
+6. After Terminal finishes, use the in-app status, Logs, and Test Now probe controls to verify the mount.
+7. To change endpoint, region, bucket, prefix, mount path, ports, credentials, cache, quota, ZeroFS binary, or background probe settings, save the profile and run "Apply & Restart LaunchDaemon" again.
+8. To remove the launchd jobs, click "Remove LaunchDaemon" or run the bundled uninstall script from the app workflow.
+
 The app includes reviewed helper scripts inside the app bundle and opens them
 from the UI when a technical user chooses manual sudo workflows.
-
-Technical users can remove quarantine for local development testing:
-
-xattr -dr com.apple.quarantine "/Applications/ZeroFS Manager.app"
-open "/Applications/ZeroFS Manager.app"
 
 This is not official user-facing installation guidance and does not replace
 Developer ID signing, notarization, stapling, or SMAppService approval testing.
@@ -92,7 +101,10 @@ hdiutil create \
   -format UDZO \
   "$DMG_PATH" >/dev/null
 
+(cd "$DIST_DIR" && shasum -a 256 "$(basename "$DMG_PATH")" "$(basename "$ZIP_PATH")" > SHA256SUMS)
+
 echo "GitHub-style development build outputs:"
 echo "  App: $APP_PATH"
 echo "  Zip: $ZIP_PATH"
 echo "  DMG: $DMG_PATH"
+echo "  Checksums: $DIST_DIR/SHA256SUMS"

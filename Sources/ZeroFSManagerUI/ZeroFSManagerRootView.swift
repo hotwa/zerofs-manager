@@ -250,6 +250,7 @@ private struct ProfileDetailView: View {
                 Section(language.text(.objectStorage)) {
                     TextField(language.text(.displayName), text: $profile.displayName)
                     TextField(language.text(.endpoint), text: $profile.endpoint)
+                    TextField(language.text(.region), text: $profile.region)
                     TextField(language.text(.bucket), text: $profile.bucket)
                     TextField(language.text(.prefix), text: $profile.prefix)
                     SecureField(language.text(.accessKey), text: $profile.accessKey)
@@ -1573,10 +1574,10 @@ final class ZeroFSManagerViewModel: ObservableObject {
 
     private func loadMergedProbeResults(profileID: ProfileID) -> [ProbeResult] {
         let local = (try? probeResultStore.load(profileID: profileID)) ?? []
-        let background = (try? backgroundProbeResultStore.load(profileID: profileID)) ?? []
+        let background = (try? backgroundProbeResultStore.load(profileID: profileID, persistPrunedResults: false)) ?? []
         let nestedBackground = (try? FileProbeResultStore(
             directoryURL: backgroundProbeResultStore.directoryURL.appendingPathComponent(profileID.rawValue, isDirectory: true)
-        ).load(profileID: profileID)) ?? []
+        ).load(profileID: profileID, persistPrunedResults: false)) ?? []
         var seen = Set<UUID>()
         return (local + background + nestedBackground)
             .sorted { $0.startedAt > $1.startedAt }
@@ -1653,7 +1654,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
             let envURL = try writeManualEnv(for: profile)
             let scriptURL = try manualScriptURL(named: "manual-mount-test.sh")
             let command = "cd \(shellQuote(scriptURL.deletingLastPathComponent().path)) && \(shellQuote(scriptURL.path)) --env \(shellQuote(envURL.path)) --delete-env-on-exit"
-            try openTerminal(command: command)
+            try openTerminal(command: command, sensitiveEnvURL: envURL)
             notifications.append(MountNotification(profileID: id, title: language.text(.manualMountTestTitle), body: language.text(.manualMountTestBody)))
         } catch let error as DevModeManualTestError {
             recordMountFailure(profileID: id, message: error.description(language: language), recovery: error.recovery)
@@ -1701,7 +1702,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
             let envURL = try writeLaunchDaemonEnv(for: profile)
             let scriptURL = try manualScriptURL(named: "manual-install-profile-launchdaemon.sh")
             let command = "cd \(shellQuote(scriptURL.deletingLastPathComponent().path)) && \(shellQuote(scriptURL.path)) --env \(shellQuote(envURL.path)) --delete-env-on-exit"
-            try openTerminal(command: command)
+            try openTerminal(command: command, sensitiveEnvURL: envURL)
             profiles[index].lastError = language.text(.launchDaemonInstallBody)
             notifications.append(MountNotification(
                 profileID: id,
@@ -2001,7 +2002,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
         S3_ENDPOINT=\(shellQuote(profile.endpoint))
         S3_BUCKET=\(shellQuote(profile.bucket))
         S3_PREFIX=\(shellQuote(profile.prefix))
-        S3_REGION='us-east-1'
+        S3_REGION=\(shellQuote(profile.region))
         S3_ACCESS_KEY=\(shellQuote(accessKey))
         S3_SECRET_KEY=\(shellQuote(secretKey))
         ZEROFS_PASSWORD=\(shellQuote(password))
@@ -2040,7 +2041,7 @@ final class ZeroFSManagerViewModel: ObservableObject {
         S3_ENDPOINT=\(shellQuote(profile.endpoint))
         S3_BUCKET=\(shellQuote(profile.bucket))
         S3_PREFIX=\(shellQuote(profile.prefix))
-        S3_REGION='us-east-1'
+        S3_REGION=\(shellQuote(profile.region))
         S3_ACCESS_KEY=\(shellQuote(accessKey))
         S3_SECRET_KEY=\(shellQuote(secretKey))
         ZEROFS_PASSWORD=\(shellQuote(password))
@@ -2083,15 +2084,25 @@ final class ZeroFSManagerViewModel: ObservableObject {
         return scriptURL
     }
 
-    private func openTerminal(command: String) throws {
+    private func openTerminal(command: String, sensitiveEnvURL: URL? = nil) throws {
+        let terminalCommand: String
+        if let sensitiveEnvURL {
+            let cleanup = "rm -f \(shellQuote(sensitiveEnvURL.path))"
+            terminalCommand = "/bin/zsh -lc \(shellQuote("trap \(shellQuote(cleanup)) EXIT INT TERM HUP; \(command)"))"
+        } else {
+            terminalCommand = command
+        }
         let source = """
         tell application "Terminal"
           activate
-          do script \(appleScriptString(command))
+          do script \(appleScriptString(terminalCommand))
         end tell
         """
         var error: NSDictionary?
         guard NSAppleScript(source: source)?.executeAndReturnError(&error) != nil else {
+            if let sensitiveEnvURL {
+                try? FileManager.default.removeItem(at: sensitiveEnvURL)
+            }
             throw DevModeManualTestError.terminalLaunchFailed(error?.description ?? "unknown AppleScript error")
         }
     }
@@ -2188,6 +2199,7 @@ struct EditableMountProfile: Identifiable, Equatable {
     var id: ProfileID
     var displayName: String
     var endpoint: String
+    var region: String
     var bucket: String
     var prefix: String
     var mountPath: String
@@ -2212,6 +2224,7 @@ struct EditableMountProfile: Identifiable, Equatable {
         id: ProfileID,
         displayName: String,
         endpoint: String,
+        region: String,
         bucket: String,
         prefix: String,
         mountPath: String,
@@ -2235,6 +2248,7 @@ struct EditableMountProfile: Identifiable, Equatable {
         self.id = id
         self.displayName = displayName
         self.endpoint = endpoint
+        self.region = region
         self.bucket = bucket
         self.prefix = prefix
         self.mountPath = mountPath
@@ -2261,6 +2275,7 @@ struct EditableMountProfile: Identifiable, Equatable {
             id: mountProfile.id,
             displayName: mountProfile.displayName,
             endpoint: mountProfile.endpoint,
+            region: mountProfile.region,
             bucket: mountProfile.bucket,
             prefix: mountProfile.prefix,
             mountPath: mountProfile.mountPath.rawValue,
@@ -2288,6 +2303,7 @@ struct EditableMountProfile: Identifiable, Equatable {
             id: id,
             displayName: displayName,
             endpoint: endpoint,
+            region: region,
             bucket: bucket,
             prefix: prefix,
             mountPath: MountPath(rawValue: mountPath),
@@ -2304,6 +2320,7 @@ struct EditableMountProfile: Identifiable, Equatable {
             id: try! ProfileID("new-profile"),
             displayName: "New Profile",
             endpoint: "https://",
+            region: "us-east-1",
             bucket: "",
             prefix: "",
             mountPath: MountPath.defaultPath(displayName: "New Profile").rawValue,
@@ -2383,6 +2400,7 @@ private extension ValidationIssue {
         switch self {
         case .invalidProfileID: language.text(.invalidProfileID)
         case .invalidEndpoint: language.text(.invalidEndpoint)
+        case .invalidRegion: language.text(.invalidRegion)
         case .invalidBucket: language.text(.invalidBucket)
         case .invalidPrefix: language.text(.invalidPrefix)
         case .invalidMountPath: language.text(.invalidMountPath)

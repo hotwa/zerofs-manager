@@ -14,7 +14,9 @@ struct ZeroFSProbeTests {
         try checkProbeSettingsPersistManualAndScheduledTimestamps(&checks)
         try checkProbeResultDiagnosticsExposeThroughputDurationCleanupAndFailure(&checks)
         try checkProbeResultStoreRetentionAndSecretSanitization(&checks)
+        try checkProbeResultStoreLoadReturnsRetainedResultsWhenPruneWriteFails(&checks)
         try checkProbeRunLockBlocksConcurrentAcquisition(&checks)
+        try checkProbeRunLockRejectsSymlinkWithoutClobberingTarget(&checks)
         try checkParseSupportsSkipReasonAndBackgroundTrigger(&checks)
         try checkSkippedLockResultUsesTemporaryExitCodeAndSanitizedJSON(&checks)
         try checkSkipReasonResultUsesTemporaryExitCode(&checks)
@@ -120,7 +122,10 @@ struct ZeroFSProbeTests {
 
     private static func checkProbeSettingsPersistManualAndScheduledTimestamps(_ checks: inout ProbeTestSuite) throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
         let store = FileProbeSettingsStore(fileURL: root.appendingPathComponent("probe-settings.json"))
         let profileID = try ProfileID("example-profile")
         let scheduledAt = Date(timeIntervalSince1970: 1_000)
@@ -192,6 +197,29 @@ struct ZeroFSProbeTests {
         checks.expect(!serialized.contains(secret), "probe result store redacts explicit secrets")
     }
 
+    private static func checkProbeResultStoreLoadReturnsRetainedResultsWhenPruneWriteFails(_ checks: inout ProbeTestSuite) throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FileProbeResultStore(
+            directoryURL: root,
+            retention: ProbeResultRetention(maxRecordsPerProfile: 1, maxAgeSeconds: 60)
+        )
+        let profileID = try ProfileID("example-profile")
+        let first = makeResult(profileID: profileID, startedAt: Date().addingTimeInterval(-2))
+        let second = makeResult(profileID: profileID, startedAt: Date().addingTimeInterval(-1))
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try encoder.encode([first, second]).write(to: store.fileURL(for: profileID), options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path)
+
+        let loaded = try store.load(profileID: profileID)
+        checks.expect(loaded.count == 1, "probe result load returns retained records even when prune persistence fails")
+        checks.expect(loaded.first?.id == second.id, "probe result load keeps the newest retained record after prune persistence failure")
+    }
+
     private static func checkProbeRunLockBlocksConcurrentAcquisition(_ checks: inout ProbeTestSuite) throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -206,6 +234,29 @@ struct ZeroFSProbeTests {
         let second = try lock.acquire(processIdentifier: ProcessInfo.processInfo.processIdentifier)
         checks.expect(second != nil, "probe run lock releases cleanly")
         second?.release()
+    }
+
+    private static func checkProbeRunLockRejectsSymlinkWithoutClobberingTarget(_ checks: inout ProbeTestSuite) throws {
+        #if canImport(Darwin)
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let target = root.appendingPathComponent("target.txt")
+        try "do-not-clobber".write(to: target, atomically: true, encoding: .utf8)
+        let symlink = root.appendingPathComponent("probe.lock")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: target)
+
+        let lock = ProbeRunLock(lockDirectory: symlink, staleAfterSeconds: 60)
+        do {
+            _ = try lock.acquire(processIdentifier: ProcessInfo.processInfo.processIdentifier)
+            checks.expect(false, "probe run lock rejects symlink lock paths")
+        } catch {
+            let targetContents = try String(contentsOf: target, encoding: .utf8)
+            checks.expect(targetContents == "do-not-clobber", "probe run lock does not clobber a symlink target")
+        }
+        #else
+        checks.expect(true, "probe run lock symlink clobber guard is Darwin-specific")
+        #endif
     }
 
     private static func checkParseSupportsSkipReasonAndBackgroundTrigger(_ checks: inout ProbeTestSuite) throws {

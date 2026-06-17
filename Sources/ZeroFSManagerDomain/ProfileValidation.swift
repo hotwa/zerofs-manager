@@ -3,6 +3,7 @@ import Foundation
 public enum ValidationIssue: String, Codable, Equatable, Sendable, CustomStringConvertible {
     case invalidProfileID
     case invalidEndpoint
+    case invalidRegion
     case invalidBucket
     case invalidPrefix
     case invalidMountPath
@@ -26,6 +27,9 @@ public enum ProfileValidator {
         }
         if !isValidEndpoint(profile.endpoint) {
             issues.append(.invalidEndpoint)
+        }
+        if !isValidRegion(profile.region) {
+            issues.append(.invalidRegion)
         }
         if !isValidBucket(profile.bucket) {
             issues.append(.invalidBucket)
@@ -68,6 +72,15 @@ public enum ProfileValidator {
     private static func isValidBucket(_ value: String) -> Bool {
         let pattern = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/
         return value.wholeMatch(of: pattern) != nil && !value.contains("..")
+    }
+
+    private static func isValidRegion(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed == value, !value.isEmpty else {
+            return false
+        }
+        let pattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+        return value.wholeMatch(of: pattern) != nil
     }
 
     private static func isValidPrefix(_ value: String) -> Bool {

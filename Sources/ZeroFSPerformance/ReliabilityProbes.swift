@@ -372,11 +372,11 @@ public struct FileProbeResultStore {
         try write(retained(results, now: Date(), redactingSecrets: redactingSecrets), for: result.profileID, redactingSecrets: redactingSecrets)
     }
 
-    public func load(profileID: ProfileID) throws -> [ProbeResult] {
+    public func load(profileID: ProfileID, persistPrunedResults: Bool = true) throws -> [ProbeResult] {
         let loaded = try read(profileID: profileID)
         let kept = retained(loaded, now: Date())
-        if kept != loaded {
-            try write(kept, for: profileID)
+        if persistPrunedResults && kept != loaded {
+            try? write(kept, for: profileID)
         }
         return kept
     }
@@ -498,36 +498,82 @@ public struct ProbeRunLock: Sendable {
             return nil
         }
 
-        var fileDescriptor = Darwin.open(lockDirectory.path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH)
-        var canWriteMetadata = true
-        if fileDescriptor == -1 && (errno == EACCES || errno == EISDIR) {
-            fileDescriptor = Darwin.open(lockDirectory.path, O_RDONLY)
-            canWriteMetadata = false
+        let noFollow = noFollowOpenFlag()
+        var createdLockFile = false
+        var fileDescriptor = Darwin.open(
+            lockDirectory.path,
+            O_RDWR | O_CREAT | O_EXCL | noFollow,
+            S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH
+        )
+        if fileDescriptor != -1 {
+            createdLockFile = true
+        } else if errno == EEXIST {
+            fileDescriptor = Darwin.open(lockDirectory.path, O_RDWR | noFollow)
         }
+        let openError = errno
         guard fileDescriptor != -1 else {
             ProbeRunLockRegistry.shared.release(lockDirectory.path)
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            if openError == EISDIR {
+                return try acquireDirectoryLock(now: now, processIdentifier: processIdentifier)
+            }
+            throw POSIXError(POSIXErrorCode(rawValue: openError) ?? .EIO)
         }
 
-        if Darwin.lockf(fileDescriptor, F_TLOCK, 0) != 0 {
+        do {
+            try validateLockFile(fileDescriptor: fileDescriptor)
+        } catch {
+            Darwin.close(fileDescriptor)
+            ProbeRunLockRegistry.shared.release(lockDirectory.path)
+            throw error
+        }
+
+        if applyFileLock(fileDescriptor: fileDescriptor, type: Int16(F_WRLCK)) != 0 {
             let lockError = errno
             Darwin.close(fileDescriptor)
             ProbeRunLockRegistry.shared.release(lockDirectory.path)
-            if !canWriteMetadata && lockError == EBADF {
-                return try acquireDirectoryLock(now: now, processIdentifier: processIdentifier)
-            }
             if lockError == EACCES || lockError == EAGAIN {
                 return nil
             }
             throw POSIXError(POSIXErrorCode(rawValue: lockError) ?? .EIO)
         }
 
-        if canWriteMetadata {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o666], ofItemAtPath: lockDirectory.path)
+        if createdLockFile {
+            _ = Darwin.fchmod(fileDescriptor, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH)
+            // Metadata is only written to a file created with O_EXCL in this process.
             writeMetadata(processIdentifier: processIdentifier, startedAt: now, to: fileDescriptor)
         }
 
         return ProbeRunLockHandle(lockDirectory: lockDirectory, fileDescriptor: fileDescriptor, registryPath: lockDirectory.path)
+    }
+
+    private func noFollowOpenFlag() -> Int32 {
+        #if canImport(Darwin)
+        return O_NOFOLLOW
+        #else
+        return 0
+        #endif
+    }
+
+    private func validateLockFile(fileDescriptor: Int32) throws {
+        var statBuffer = stat()
+        guard Darwin.fstat(fileDescriptor, &statBuffer) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard (statBuffer.st_mode & S_IFMT) == S_IFREG else {
+            throw POSIXError(.EFTYPE)
+        }
+        guard statBuffer.st_nlink == 1 else {
+            throw POSIXError(.EMLINK)
+        }
+    }
+
+    private func applyFileLock(fileDescriptor: Int32, type: Int16) -> Int32 {
+        var lock = Darwin.flock()
+        lock.l_type = type
+        lock.l_whence = Int16(SEEK_SET)
+        lock.l_start = 0
+        lock.l_len = 0
+        return Darwin.fcntl(fileDescriptor, F_SETLK, &lock)
     }
 
     private func writeMetadata(processIdentifier: Int32, startedAt: Date, to fileDescriptor: Int32) {
@@ -621,7 +667,12 @@ public struct ProbeRunLockHandle: Sendable {
     public func release() {
         #if canImport(Darwin)
         if let fileDescriptor {
-            _ = Darwin.lockf(fileDescriptor, F_ULOCK, 0)
+            var lock = Darwin.flock()
+            lock.l_type = Int16(F_UNLCK)
+            lock.l_whence = Int16(SEEK_SET)
+            lock.l_start = 0
+            lock.l_len = 0
+            _ = Darwin.fcntl(fileDescriptor, F_SETLK, &lock)
             _ = Darwin.close(fileDescriptor)
             if let registryPath {
                 ProbeRunLockRegistry.shared.release(registryPath)

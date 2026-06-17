@@ -37,13 +37,12 @@ Scripts/inspect-signature.sh "dist/ZeroFS Manager.app"
 本機檢查：
 
 ```sh
-swift build
-swift run ZeroFSManagerChecks
+Scripts/verify-local.sh
 ```
 
 ## GitHub Releases
 
-倉庫包含 GitHub Actions 發布流程。推送 `v0.1.2` 這類 tag 後，會建置 ad-hoc GitHub 套件並上傳：
+倉庫包含 GitHub Actions 發布流程。推送 `v0.1.4` 這類 tag 後，會建置 ad-hoc GitHub 套件並上傳：
 
 - `ZeroFS-Manager-dev-adhoc.dmg`
 - `ZeroFS-Manager-dev-adhoc.zip`
