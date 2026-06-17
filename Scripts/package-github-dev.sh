@@ -65,6 +65,12 @@ It is not signed with Apple Developer ID.
 macOS Gatekeeper may block it.
 For development/testing only.
 
+Install:
+
+1. Drag or copy "ZeroFS Manager.app" to /Applications.
+2. Do not run the app directly from this mounted DMG.
+3. Install external ZeroFS separately, then launch the app from /Applications.
+
 The app includes reviewed helper scripts inside the app bundle and opens them
 from the UI when a technical user chooses manual sudo workflows.
 

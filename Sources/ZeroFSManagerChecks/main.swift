@@ -54,7 +54,7 @@ struct ZeroFSManagerChecks {
         checks.expect(ProfileValidator.validate(injectedPrefix).contains(.invalidPrefix), "prefix TOML injection characters are rejected")
 
         var endpointWithPath = try MountProfile.example()
-        endpointWithPath.endpoint = "https://amiaps3.hzau.edu.cn/with/path"
+        endpointWithPath.endpoint = "https://s3.example.invalid/with/path"
         checks.expect(ProfileValidator.validate(endpointWithPath).contains(.invalidEndpoint), "endpoint path is rejected")
 
         var invalidID = try MountProfile.example()
@@ -65,8 +65,8 @@ struct ZeroFSManagerChecks {
         duplicatePorts.ports = PortSet(nfs: 2049, rpc: 2049, metrics: 9091)
         checks.expect(ProfileValidator.validate(duplicatePorts).contains(.duplicatePorts), "duplicate ports are rejected")
 
-        let id = try ProfileID("lingyuzeng")
-        let firstName = try MountProfile.example(id: id, displayName: "Lingyuzeng")
+        let id = try ProfileID("example-profile")
+        let firstName = try MountProfile.example(id: id, displayName: "Example Profile")
         let renamed = try MountProfile.example(id: id, displayName: "Renamed")
         checks.expect(
             ProfileRuntimePaths(profile: firstName).configPath == ProfileRuntimePaths(profile: renamed).configPath,
@@ -91,7 +91,7 @@ struct ZeroFSManagerChecks {
             "different profiles share one stable helper mach service"
         )
         checks.expect(
-            PrivilegedMountPathPolicy().issues(for: MountPath(rawValue: "/Volumes/ZeroFS-lingyuzeng")).isEmpty,
+            PrivilegedMountPathPolicy().issues(for: MountPath(rawValue: "/Volumes/ZeroFS-Example")).isEmpty,
             "privileged mount policy allows child Volumes mount"
         )
         checks.expect(
@@ -104,10 +104,10 @@ struct ZeroFSManagerChecks {
         )
         let mountOutput = """
         /dev/disk3s1 on / (apfs, local)
-        127.0.0.1:/ on /Volumes/ZeroFS-lingyuzeng (nfs, asynchronous)
+        127.0.0.1:/ on /Volumes/ZeroFS-Example (nfs, asynchronous)
         """
         checks.expect(
-            LocalMountTable.isMounted(path: "/Volumes/ZeroFS-lingyuzeng", mountOutput: mountOutput),
+            LocalMountTable.isMounted(path: "/Volumes/ZeroFS-Example", mountOutput: mountOutput),
             "local mount table detects an externally mounted ZeroFS path"
         )
         checks.expect(
@@ -115,11 +115,11 @@ struct ZeroFSManagerChecks {
             "local mount table reports missing mount path"
         )
         let nonZeroFSMountOutput = """
-        /dev/disk9s1 on /Volumes/ZeroFS-lingyuzeng (apfs, local, read-only)
+        /dev/disk9s1 on /Volumes/ZeroFS-Example (apfs, local, read-only)
         storage.example:/ on /Volumes/ZeroFS-remote (nfs, nodev, nosuid)
         """
         checks.expect(
-            !LocalMountTable.isMounted(path: "/Volumes/ZeroFS-lingyuzeng", mountOutput: nonZeroFSMountOutput),
+            !LocalMountTable.isMounted(path: "/Volumes/ZeroFS-Example", mountOutput: nonZeroFSMountOutput),
             "local mount table rejects ordinary mounts at the ZeroFS path"
         )
         checks.expect(
@@ -150,7 +150,7 @@ struct ZeroFSManagerChecks {
     }
 
     private static func checkSecrets(_ checks: inout CheckSuite) throws {
-        let profileID = try ProfileID("lingyuzeng")
+        let profileID = try ProfileID("example-profile")
         let store = InMemorySecretStore()
         try store.save("access-value", kind: .s3AccessKeyID, profileID: profileID)
         try store.save("secret-value", kind: .s3SecretAccessKey, profileID: profileID)
@@ -177,9 +177,9 @@ struct ZeroFSManagerChecks {
             checksumStatus: .pass,
             writeSeconds: 0.1,
             readSeconds: 0.1,
-            dfBeforeWrite: DiskUsageSnapshot(phase: .beforeWrite, path: "/Volumes/ZeroFS-lingyuzeng", rawOutput: "df output"),
-            dfAfterWrite: DiskUsageSnapshot(phase: .afterWrite, path: "/Volumes/ZeroFS-lingyuzeng", rawOutput: "df output"),
-            dfAfterCleanup: DiskUsageSnapshot(phase: .afterCleanup, path: "/Volumes/ZeroFS-lingyuzeng", rawOutput: "df output"),
+            dfBeforeWrite: DiskUsageSnapshot(phase: .beforeWrite, path: "/Volumes/ZeroFS-Example", rawOutput: "df output"),
+            dfAfterWrite: DiskUsageSnapshot(phase: .afterWrite, path: "/Volumes/ZeroFS-Example", rawOutput: "df output"),
+            dfAfterCleanup: DiskUsageSnapshot(phase: .afterCleanup, path: "/Volumes/ZeroFS-Example", rawOutput: "df output"),
             metricsBeforeCleanup: "zerofs_used_bytes 0",
             metricsAfterCleanup: "zerofs_used_bytes 0",
             remoteCleanup: .removed,
@@ -394,7 +394,7 @@ struct ZeroFSManagerChecks {
     private static func checkHelperRuntime(_ checks: inout CheckSuite) throws {
         let profile = try MountProfile.example()
         let fileSet = try HelperRuntimeGenerator.makeFileSet(profile: profile)
-        checks.expect(fileSet.configContents.contains("amiaps3.hzau.edu.cn"), "helper runtime config contains endpoint")
+        checks.expect(fileSet.configContents.contains("s3.example.invalid"), "helper runtime config contains endpoint")
         checks.expect(!fileSet.configContents.contains("secret-value"), "helper runtime config contains no secret")
 
         var unsafeProfile = profile
@@ -453,7 +453,7 @@ struct ZeroFSManagerChecks {
         checks.expect((envAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o600, "helper runtime env file uses 0600 permissions")
 
         checks.expect(fileSet.configContents.contains("[storage]"), "helper runtime config uses ZeroFS storage section")
-        checks.expect(fileSet.configContents.contains("s3://user-123456789/lingyuzeng"), "helper runtime config uses bucket and prefix URL")
+        checks.expect(fileSet.configContents.contains("s3://example-bucket/example-prefix"), "helper runtime config uses bucket and prefix URL")
         checks.expect(fileSet.configContents.contains("[aws]"), "helper runtime config uses ZeroFS aws section")
         checks.expect(fileSet.configContents.contains("127.0.0.1:2049"), "helper runtime config binds NFS to loopback port")
         checks.expect(
@@ -485,7 +485,7 @@ struct ZeroFSManagerChecks {
                     "-o",
                     "async,nolocks,vers=3,tcp,port=2049,mountport=2049,hard,rsize=1048576,wsize=1048576",
                     "127.0.0.1:/",
-                    "/Volumes/ZeroFS-lingyuzeng"
+                    "/Volumes/ZeroFS-Example"
                 ]
             ),
             "helper runtime builds proven NFSv3 mount command"
@@ -493,7 +493,7 @@ struct ZeroFSManagerChecks {
         checks.expect(
             ExternalZeroFSCommandFactory.unmountCommand(profile: profile) == HelperCommand(
                 executablePath: "/sbin/umount",
-                arguments: ["/Volumes/ZeroFS-lingyuzeng"]
+                arguments: ["/Volumes/ZeroFS-Example"]
             ),
             "helper runtime builds unmount command"
         )
@@ -666,7 +666,7 @@ struct ZeroFSManagerChecks {
         )
         do {
             _ = try await missingMountRunner.run(
-                profileID: try ProfileID("lingyuzeng"),
+                profileID: try ProfileID("example-profile"),
                 mountDirectory: missingMountRoot.appendingPathComponent("not-mounted"),
                 workDirectory: missingWork,
                 sizeBytes: 4096
@@ -692,7 +692,7 @@ struct ZeroFSManagerChecks {
             settleAfterCleanupNanoseconds: 0
         )
         let report = try await runner.run(
-            profileID: try ProfileID("lingyuzeng"),
+            profileID: try ProfileID("example-profile"),
             mountDirectory: mount,
             workDirectory: work,
             sizeBytes: 4096
@@ -724,7 +724,7 @@ struct ZeroFSManagerChecks {
         )
         do {
             _ = try await failingRunner.run(
-                profileID: try ProfileID("lingyuzeng"),
+                profileID: try ProfileID("example-profile"),
                 mountDirectory: failureMount,
                 workDirectory: failureWork,
                 sizeBytes: 4096
@@ -777,8 +777,10 @@ struct ZeroFSManagerChecks {
         checks.expect(rootViewSource.contains("writeLaunchDaemonEnv"), "GitHub-style dev UI writes profile launchd env outside the repo")
         checks.expect(rootViewSource.contains("manual-install-profile-launchdaemon.sh"), "GitHub-style dev UI calls the sudo profile launchd installer")
         checks.expect(rootViewSource.contains("ZEROFS_MANAGER_SCRIPT_DIR"), "local dev script lookup uses an explicit environment override")
-        checks.expect(!rootViewSource.contains("/Users/lingyuzeng/project/zerofs-manager"), "app runtime does not hardcode developer machine script paths")
-        checks.expect(!rootViewSource.contains("EditableMountProfile.lingyuzeng()"), "first launch does not seed a personal object-store profile")
+        checks.expect(!rootViewSource.contains("/Users/"), "app runtime does not hardcode developer machine script paths")
+        checks.expect(rootViewSource.contains("EditableMountProfile.empty()"), "first launch starts from an empty profile template")
+        let forbiddenBucket = "user-" + "123456789"
+        checks.expect(!rootViewSource.contains(forbiddenBucket), "first launch does not seed a personal object-store profile")
         checks.expect(rootViewSource.contains("MountFailureRecovery.classify"), "mount failure dialogs classify recovery actions by failure type")
         checks.expect(rootViewSource.contains("case .credentials"), "missing credential failures avoid helper approval guidance")
         checks.expect(rootViewSource.contains("@AppStorage(AppLanguage.storageKey)"), "app persists selected UI language")
@@ -842,10 +844,18 @@ struct ZeroFSManagerChecks {
         checks.expect(profileInstallScript.contains("Refusing unsafe ZEROFS_MOUNT_POINT"), "profile launchd installer rejects unsafe mount points")
         checks.expect(profileInstallScript.contains("^[a-z0-9][a-z0-9-]{0,62}$"), "profile launchd installer uses app-compatible profile ids")
         checks.expect(profileInstallScript.contains("install -o root -g wheel -m 0600"), "profile launchd installer stores secrets in root-only env file")
+        checks.expect(profileInstallScript.contains("STAGED_ZEROFS_BIN"), "profile launchd installer stages zerofs into the root-owned runtime directory")
+        checks.expect(profileInstallScript.contains("install -o root -g wheel -m 0755"), "profile launchd installer installs staged zerofs as a root-owned executable")
+        checks.expect(profileInstallScript.contains("assert_root_owned_runtime_file"), "profile launchd installer verifies staged zerofs permissions")
+        checks.expect(profileInstallScript.contains("is_trusted_root_env"), "profile launchd installer only sources trusted root-owned existing env files")
+        checks.expect(profileInstallScript.contains("launchctl bootout \"system/$label\""), "profile launchd installer falls back to label-based bootout")
         checks.expect(profileInstallScript.contains("RunAtLoad"), "profile launchd installer enables startup behavior")
         checks.expect(profileInstallScript.contains("StartInterval"), "profile launchd mount job retries mount readiness")
         let profileUninstallScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-uninstall-profile-launchdaemon.sh"), encoding: .utf8)
         checks.expect(profileUninstallScript.contains("launchctl bootout system"), "profile launchd uninstaller stops system LaunchDaemons")
+        checks.expect(profileUninstallScript.contains("launchctl bootout \"system/$label\""), "profile launchd uninstaller falls back to label-based bootout")
+        checks.expect(profileUninstallScript.contains("ensure_job_unloaded"), "profile launchd uninstaller verifies launchd jobs are gone")
+        checks.expect(profileUninstallScript.contains("is_trusted_root_env"), "profile launchd uninstaller only sources trusted root-owned existing env files")
         checks.expect(profileUninstallScript.contains("is_safe_mount_point"), "profile launchd uninstaller validates mount points before unmounting")
         checks.expect(profileUninstallScript.contains("^[a-z0-9][a-z0-9-]{0,62}$"), "profile launchd uninstaller uses app-compatible profile ids")
         checks.expect(profileUninstallScript.contains("sudo rm -f \"$MOUNT_PLIST\" \"$RUNTIME_PLIST\""), "profile launchd uninstaller removes installed plists")
@@ -856,7 +866,11 @@ struct ZeroFSManagerChecks {
         checks.expect(githubDevPackageScript.contains("GitHub-style development build"), "github-dev package README warns about dev distribution")
         checks.expect(githubDevPackageScript.contains("ZeroFS-Manager-dev-adhoc.dmg"), "github-dev package emits dev adhoc DMG")
         checks.expect(githubDevPackageScript.contains("LICENSE.txt"), "github-dev DMG includes Apache license text")
+        checks.expect(githubDevPackageScript.contains("Do not run the app directly from this mounted DMG"), "github-dev DMG README tells users to install before launching")
         checks.expect(!githubDevPackageScript.contains("cp -R \"$PROJECT_ROOT/Scripts\""), "github-dev DMG does not expose the full development Scripts directory")
+        let developmentDocs = try String(contentsOf: projectRoot.appendingPathComponent("docs/development.md"), encoding: .utf8)
+        checks.expect(developmentDocs.contains("cd <repo-root>"), "development docs use a generic repo-root path")
+        checks.expect(!developmentDocs.contains("/Users/"), "development docs do not leak a local machine path")
         let localDMGScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/package-dmg.sh"), encoding: .utf8)
         checks.expect(localDMGScript.contains("LICENSE.txt"), "local DMG includes Apache license text")
         let debugInstallScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-install-launchdaemon-debug.sh"), encoding: .utf8)
@@ -925,16 +939,16 @@ struct CheckSuite {
 
 extension MountProfile {
     static func example(
-        id: ProfileID = try! ProfileID("lingyuzeng"),
-        displayName: String = "lingyuzeng"
+        id: ProfileID = try! ProfileID("example-profile"),
+        displayName: String = "example-profile"
     ) throws -> MountProfile {
         MountProfile(
             id: id,
             displayName: displayName,
-            endpoint: "https://amiaps3.hzau.edu.cn",
-            bucket: "user-123456789",
-            prefix: "lingyuzeng",
-            mountPath: MountPath(rawValue: "/Volumes/ZeroFS-lingyuzeng"),
+            endpoint: "https://s3.example.invalid",
+            bucket: "example-bucket",
+            prefix: "example-prefix",
+            mountPath: MountPath(rawValue: "/Volumes/ZeroFS-Example"),
             quota: Quota(gigabytes: 1024),
             cache: CacheSettings(diskGigabytes: 10, memoryGigabytes: 0.5),
             ports: PortSet(nfs: 2049, rpc: 17000, metrics: 9091),

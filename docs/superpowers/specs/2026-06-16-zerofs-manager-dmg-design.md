@@ -83,7 +83,7 @@ Runtime paths are profile-scoped. Exact paths can be refined during implementati
 - profile logs under a root-owned log path,
 - exported reports under a user-selected or app-managed user directory.
 
-The existing hand-built setup at `/etc/zerofs`, `/Library/LaunchDaemons/com.zerofs.lingyuzeng.*`, and `/Volumes/ZeroFS-lingyuzeng` is useful reference behavior, but the product should generate profile-scoped equivalents rather than assuming those exact names.
+The existing hand-built setup pattern with config files, profile-specific LaunchDaemons, and a `/Volumes/ZeroFS-Example` mount is useful reference behavior, but the product should generate profile-scoped equivalents rather than assuming fixed names.
 
 ## Performance Testing
 
@@ -117,7 +117,7 @@ If Developer ID credentials are unavailable, the packaging script should fail cl
 
 ## OpenSpec and Project Location
 
-The project lives at `/Users/lingyuzeng/project/zerofs-manager`.
+The project lives at `<repo-root>`.
 
 OpenSpec is the source for the implementation proposal, design, and task list. The first OpenSpec change should cover the distributable v1 architecture and scaffold.
 

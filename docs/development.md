@@ -30,7 +30,7 @@ Missing Developer ID or notary configuration must not block `github-dev` builds.
 ## Build And Verify
 
 ```sh
-cd /Users/lingyuzeng/project/zerofs-manager
+cd <repo-root>
 Scripts/verify-local.sh
 ```
 
@@ -74,10 +74,8 @@ The assembled bundle intentionally does not contain `Contents/Resources/zerofs/z
 ## GitHub-style Dev Package
 
 ```sh
-Scripts/build-app.sh --configuration release
-Scripts/sign-app-adhoc.sh "dist/ZeroFS Manager.app"
-Scripts/inspect-signature.sh "dist/ZeroFS Manager.app"
 Scripts/package-github-dev.sh
+Scripts/inspect-signature.sh "dist/ZeroFS Manager.app"
 ```
 
 The outputs are:
@@ -128,7 +126,7 @@ Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-
 Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id example-profile --mount-point /Volumes/ZeroFS-Example
 ```
 
-The best-practice layout is a stable pair of plist files under `/Library/LaunchDaemons` plus dynamic profile config under `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>`. The runtime plist runs `run-zerofs.sh`; the mount plist runs `mount-zerofs.sh`. All user-adjustable values such as endpoint, bucket, prefix, mount directory, ports, cache, quota, and credentials are written to `zerofs.toml` and root-only `zerofs.env`. After a profile parameter changes, the app opens Terminal for the sudo installer again, which rewrites config/env, bootouts existing jobs, bootstraps them, and kickstarts the matching profile.
+The best-practice layout is a stable pair of plist files under `/Library/LaunchDaemons` plus dynamic profile config under `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>`. The runtime plist runs `run-zerofs.sh`; the mount plist runs `mount-zerofs.sh`. All user-adjustable values such as endpoint, bucket, prefix, mount directory, ports, cache, quota, and credentials are written to `zerofs.toml` and root-only `zerofs.env`. During install/update, the sudo script stages the user-installed `zerofs` binary into the root-owned profile runtime directory and LaunchDaemon jobs execute that fixed copy. After a profile parameter or the ZeroFS binary changes, the app opens Terminal for the sudo installer again, which rewrites config/env, bootouts existing jobs by plist path and label, bootstraps them, and kickstarts the matching profile.
 
 ## Manual Real Mount Testing
 

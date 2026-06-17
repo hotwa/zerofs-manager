@@ -111,6 +111,7 @@ LOG_ROOT="/Library/Logs/ZeroFSManager/$ZEROFS_PROFILE_ID"
 CACHE_DIR="${ZEROFS_CACHE_DIR:-/var/cache/zerofs-manager/$ZEROFS_PROFILE_ID}"
 CONFIG_PATH="$PROFILE_ROOT/zerofs.toml"
 ENV_PATH="$PROFILE_ROOT/zerofs.env"
+STAGED_ZEROFS_BIN="$PROFILE_ROOT/zerofs"
 RUN_SCRIPT="$PROFILE_ROOT/run-zerofs.sh"
 MOUNT_SCRIPT="$PROFILE_ROOT/mount-zerofs.sh"
 FLUSH_SCRIPT="$PROFILE_ROOT/flush-zerofs.sh"
@@ -146,21 +147,89 @@ redact() {
   printf "%s\n" "$text"
 }
 
+is_trusted_root_env() {
+  local path="$1"
+  local metadata
+  sudo test -f "$path" || return 1
+  sudo test ! -L "$path" || return 1
+  metadata="$(sudo /usr/bin/stat -f '%Su:%Sg:%Lp' "$path" 2>/dev/null || true)"
+  [[ "$metadata" == "root:wheel:600" ]]
+}
+
+read_trusted_env_value() {
+  local path="$1"
+  local name="$2"
+  if ! is_trusted_root_env "$path"; then
+    return 1
+  fi
+  sudo /bin/zsh -c 'set -euo pipefail; source "$1"; case "$2" in ZEROFS_MOUNT_POINT) printf "%s" "${ZEROFS_MOUNT_POINT:-}" ;; *) exit 2 ;; esac' zerofs-manager "$path" "$name" 2>/dev/null
+}
+
+bootout_job() {
+  local label="$1"
+  local plist="$2"
+  sudo launchctl bootout system "$plist" >/dev/null 2>&1 || true
+  sudo launchctl bootout "system/$label" >/dev/null 2>&1 || true
+}
+
+ensure_job_unloaded() {
+  local label="$1"
+  if sudo launchctl print "system/$label" >/dev/null 2>&1; then
+    echo "LaunchDaemon is still loaded after bootout: $label" >&2
+    exit 1
+  fi
+}
+
+assert_root_owned_runtime_file() {
+  local path="$1"
+  local metadata
+  local owner
+  local group
+  local mode
+  sudo test -f "$path" || {
+    echo "Missing staged runtime file: $path" >&2
+    exit 1
+  }
+  sudo test ! -L "$path" || {
+    echo "Refusing symlinked staged runtime file: $path" >&2
+    exit 1
+  }
+  metadata="$(sudo /usr/bin/stat -f '%Su:%Sg:%Lp' "$path" 2>/dev/null || true)"
+  IFS=: read -r owner group mode <<< "$metadata"
+  if [[ "$owner" != "root" || "$group" != "wheel" || -z "$mode" ]]; then
+    echo "Refusing unsafe staged runtime file metadata for $path: $metadata" >&2
+    exit 1
+  fi
+  if (( (8#$mode & 022) != 0 )); then
+    echo "Refusing group/world-writable staged runtime file: $path" >&2
+    exit 1
+  fi
+  if (( (8#$mode & 111) == 0 )); then
+    echo "Refusing non-executable staged runtime file: $path" >&2
+    exit 1
+  fi
+}
+
 echo "Installing ZeroFS Manager LaunchDaemons for profile: $ZEROFS_PROFILE_ID"
 echo "This path uses sudo and launchd directly. It does not require Apple Developer ID or SMAppService."
 sudo -v
 
 OLD_MOUNT_POINT=""
-if sudo test -f "$ENV_PATH"; then
-  OLD_MOUNT_POINT="$(sudo /bin/zsh -c 'source "$1"; printf "%s" "${ZEROFS_MOUNT_POINT:-}"' zerofs-manager "$ENV_PATH" 2>/dev/null || true)"
+if sudo test -e "$ENV_PATH"; then
+  OLD_MOUNT_POINT="$(read_trusted_env_value "$ENV_PATH" ZEROFS_MOUNT_POINT || true)"
+  if [[ -z "$OLD_MOUNT_POINT" ]]; then
+    echo "Skipping previous mount point because existing env is missing or not root:wheel 0600: $ENV_PATH" >&2
+  fi
 fi
 if [[ -n "$OLD_MOUNT_POINT" ]] && ! is_safe_mount_point "$OLD_MOUNT_POINT"; then
   echo "Skipping unsafe previous mount point from existing env: $OLD_MOUNT_POINT" >&2
   OLD_MOUNT_POINT=""
 fi
 
-sudo launchctl bootout system "$MOUNT_PLIST" >/dev/null 2>&1 || true
-sudo launchctl bootout system "$RUNTIME_PLIST" >/dev/null 2>&1 || true
+bootout_job "$MOUNT_LABEL" "$MOUNT_PLIST"
+bootout_job "$RUNTIME_LABEL" "$RUNTIME_PLIST"
+ensure_job_unloaded "$MOUNT_LABEL"
+ensure_job_unloaded "$RUNTIME_LABEL"
 
 if [[ -n "$OLD_MOUNT_POINT" && "$OLD_MOUNT_POINT" != "$ZEROFS_MOUNT_POINT" ]]; then
   if /sbin/mount | /usr/bin/grep -Fq " on $OLD_MOUNT_POINT "; then
@@ -228,7 +297,7 @@ set -euo pipefail
 set -a
 source $(shell_quote "$ENV_PATH")
 set +a
-exec $(shell_quote "$ZEROFS_BIN") run --config $(shell_quote "$CONFIG_PATH")
+exec $(shell_quote "$STAGED_ZEROFS_BIN") run --config $(shell_quote "$CONFIG_PATH")
 RUN
 
 cat > "$TMP_DIR/mount-zerofs.sh" <<MOUNT
@@ -273,7 +342,7 @@ set -euo pipefail
 set -a
 source $(shell_quote "$ENV_PATH")
 set +a
-exec $(shell_quote "$ZEROFS_BIN") flush --config $(shell_quote "$CONFIG_PATH")
+exec $(shell_quote "$STAGED_ZEROFS_BIN") flush --config $(shell_quote "$CONFIG_PATH")
 FLUSH
 
 cat > "$TMP_DIR/runtime.plist" <<PLIST
@@ -335,6 +404,8 @@ sudo /usr/sbin/chown root:wheel "$PROFILE_ROOT" "$LOG_ROOT" "$CACHE_DIR"
 sudo /bin/chmod 700 "$PROFILE_ROOT"
 sudo /bin/chmod 755 "$LOG_ROOT" "$CACHE_DIR" "$ZEROFS_MOUNT_POINT"
 
+sudo /usr/bin/install -o root -g wheel -m 0755 "$ZEROFS_BIN" "$STAGED_ZEROFS_BIN"
+assert_root_owned_runtime_file "$STAGED_ZEROFS_BIN"
 sudo /usr/bin/install -o root -g wheel -m 0644 "$TMP_DIR/zerofs.toml" "$CONFIG_PATH"
 sudo /usr/bin/install -o root -g wheel -m 0600 "$TMP_DIR/zerofs.env" "$ENV_PATH"
 sudo /usr/bin/install -o root -g wheel -m 0700 "$TMP_DIR/run-zerofs.sh" "$RUN_SCRIPT"
@@ -345,6 +416,7 @@ sudo /usr/bin/install -o root -g wheel -m 0644 "$TMP_DIR/mount.plist" "$MOUNT_PL
 
 echo "Runtime config written to: $PROFILE_ROOT"
 echo "Secrets are stored in root-only env file: $ENV_PATH"
+echo "ZeroFS binary staged to root-owned runtime path: $STAGED_ZEROFS_BIN"
 echo "Bootstrapping LaunchDaemons..."
 
 sudo launchctl bootstrap system "$RUNTIME_PLIST"

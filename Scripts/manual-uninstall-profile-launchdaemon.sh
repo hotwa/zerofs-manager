@@ -61,6 +61,38 @@ is_safe_mount_point() {
   [[ "$path" != *"/./"* && "$path" != *"/." ]] || return 1
 }
 
+is_trusted_root_env() {
+  local path="$1"
+  local metadata
+  sudo test -f "$path" || return 1
+  sudo test ! -L "$path" || return 1
+  metadata="$(sudo /usr/bin/stat -f '%Su:%Sg:%Lp' "$path" 2>/dev/null || true)"
+  [[ "$metadata" == "root:wheel:600" ]]
+}
+
+read_trusted_mount_point() {
+  local path="$1"
+  if ! is_trusted_root_env "$path"; then
+    return 1
+  fi
+  sudo /bin/zsh -c 'set -euo pipefail; source "$1"; printf "%s" "${ZEROFS_MOUNT_POINT:-}"' zerofs-manager "$path" 2>/dev/null
+}
+
+bootout_job() {
+  local label="$1"
+  local plist="$2"
+  sudo launchctl bootout system "$plist" >/dev/null 2>&1 || true
+  sudo launchctl bootout "system/$label" >/dev/null 2>&1 || true
+}
+
+ensure_job_unloaded() {
+  local label="$1"
+  if sudo launchctl print "system/$label" >/dev/null 2>&1; then
+    echo "LaunchDaemon is still loaded after bootout: $label" >&2
+    exit 1
+  fi
+}
+
 LABEL_PREFIX="com.zerofs.manager.profile.$PROFILE_ID"
 RUNTIME_LABEL="$LABEL_PREFIX.zerofs"
 MOUNT_LABEL="$LABEL_PREFIX.mount"
@@ -79,12 +111,17 @@ fi
 echo "Removing ZeroFS Manager LaunchDaemons for profile: $PROFILE_ID"
 sudo -v
 
-if [[ -z "$MOUNT_POINT" ]] && sudo test -f "$ENV_PATH"; then
-  MOUNT_POINT="$(sudo /bin/zsh -c 'source "$1"; printf "%s" "${ZEROFS_MOUNT_POINT:-}"' zerofs-manager "$ENV_PATH" 2>/dev/null || true)"
+if [[ -z "$MOUNT_POINT" ]] && sudo test -e "$ENV_PATH"; then
+  MOUNT_POINT="$(read_trusted_mount_point "$ENV_PATH" || true)"
+  if [[ -z "$MOUNT_POINT" ]]; then
+    echo "Skipping mount point lookup because existing env is missing or not root:wheel 0600: $ENV_PATH" >&2
+  fi
 fi
 
-sudo launchctl bootout system "$MOUNT_PLIST" >/dev/null 2>&1 || true
-sudo launchctl bootout system "$RUNTIME_PLIST" >/dev/null 2>&1 || true
+bootout_job "$MOUNT_LABEL" "$MOUNT_PLIST"
+bootout_job "$RUNTIME_LABEL" "$RUNTIME_PLIST"
+ensure_job_unloaded "$MOUNT_LABEL"
+ensure_job_unloaded "$RUNTIME_LABEL"
 
 if [[ -n "$MOUNT_POINT" ]] && ! is_safe_mount_point "$MOUNT_POINT"; then
   echo "Refusing unsafe mount point: $MOUNT_POINT" >&2
