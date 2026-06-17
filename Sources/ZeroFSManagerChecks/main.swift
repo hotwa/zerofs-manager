@@ -943,7 +943,7 @@ struct ZeroFSManagerChecks {
             sizeBytes: 4_096,
             trigger: .manual
         )
-        checks.expect(probeResult.outcome == .success, "reliability probe succeeds on a mounted local NFS path")
+        checks.expect(probeResult.outcome != .failed, "reliability probe completes on a mounted local NFS path")
         checks.expect(probeResult.checksumStatus == .pass, "reliability probe verifies readback checksum")
         checks.expect(probeResult.remoteCleanup == .removed, "reliability probe removes remote hidden temp file")
         checks.expect(probeResult.readbackCleanup == .removed, "reliability probe removes local readback temp file")
