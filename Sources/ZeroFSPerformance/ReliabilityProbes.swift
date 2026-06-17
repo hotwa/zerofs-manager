@@ -517,13 +517,13 @@ public struct ReliabilityProbeRunner {
             try fileManager.createDirectory(at: probeDirectory, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: workDirectory, withIntermediateDirectories: true)
         } catch {
-            return finishFailure("cannot create probe workspace: \(error.localizedDescription)")
+            return finishFailure("cannot create probe workspace: \(describeError(error))")
         }
 
         do {
             dfBeforeWrite = try await diskUsage.snapshot(for: mountDirectory, phase: .beforeWrite)
         } catch {
-            degradedReason = "df before write unavailable: \(error.localizedDescription)"
+            degradedReason = "df before write unavailable: \(describeError(error))"
         }
 
         let expectedChecksum: ProbeDigest
@@ -535,7 +535,7 @@ public struct ReliabilityProbeRunner {
             remoteCleanup = cleanup(remoteURL)
             readbackCleanup = cleanup(readbackURL)
             cleanupEmptyProbeDirectories(probeDirectory: probeDirectory, probeRoot: probeRoot)
-            return finishFailure("write failed: \(error.localizedDescription)")
+            return finishFailure("write failed: \(describeError(error))")
         }
 
         #if canImport(Darwin)
@@ -545,7 +545,7 @@ public struct ReliabilityProbeRunner {
         do {
             dfAfterWrite = try await diskUsage.snapshot(for: mountDirectory, phase: .afterWrite)
         } catch {
-            degradedReason = degradedReason ?? "df after write unavailable: \(error.localizedDescription)"
+            degradedReason = degradedReason ?? "df after write unavailable: \(describeError(error))"
         }
 
         do {
@@ -554,7 +554,7 @@ public struct ReliabilityProbeRunner {
             remoteCleanup = cleanup(remoteURL)
             readbackCleanup = cleanup(readbackURL)
             cleanupEmptyProbeDirectories(probeDirectory: probeDirectory, probeRoot: probeRoot)
-            return finishFailure("flush failed: \(error.localizedDescription)")
+            return finishFailure("flush failed: \(describeError(error))")
         }
 
         let actualChecksum: ProbeDigest
@@ -567,13 +567,13 @@ public struct ReliabilityProbeRunner {
             remoteCleanup = cleanup(remoteURL)
             readbackCleanup = cleanup(readbackURL)
             cleanupEmptyProbeDirectories(probeDirectory: probeDirectory, probeRoot: probeRoot)
-            return finishFailure("read failed: \(error.localizedDescription)")
+            return finishFailure("read failed: \(describeError(error))")
         }
 
         do {
             metricsSummary = try await metrics.metrics()
         } catch {
-            metricsSummary = "metrics unavailable: \(error.localizedDescription)"
+            metricsSummary = "metrics unavailable: \(describeError(error))"
             degradedReason = degradedReason ?? "metrics unavailable"
         }
 
@@ -584,7 +584,7 @@ public struct ReliabilityProbeRunner {
         do {
             dfAfterCleanup = try await diskUsage.snapshot(for: mountDirectory, phase: .afterCleanup)
         } catch {
-            degradedReason = degradedReason ?? "df after cleanup unavailable: \(error.localizedDescription)"
+            degradedReason = degradedReason ?? "df after cleanup unavailable: \(describeError(error))"
         }
 
         if settleAfterCleanupNanoseconds > 0 {
@@ -666,8 +666,16 @@ public struct ReliabilityProbeRunner {
             try fileManager.removeItem(at: url)
             return .removed
         } catch {
-            return .failed(error.localizedDescription)
+            return .failed(describeError(error))
         }
+    }
+
+    private func describeError(_ error: Error) -> String {
+        let description = String(describing: error).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !description.isEmpty {
+            return description
+        }
+        return error.localizedDescription
     }
 
     private func cleanupEmptyProbeDirectories(probeDirectory: URL, probeRoot: URL) {

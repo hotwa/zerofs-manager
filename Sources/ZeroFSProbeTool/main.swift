@@ -36,7 +36,7 @@ struct ZeroFSProbeTool {
                     )
                     try resultStore.append(skipped)
                     try writeResultJSON(skipped)
-                    terminate(75)
+                    throw ProbeToolExit.code(75)
                 }
                 lockHandle = acquiredLock
             } else {
@@ -78,12 +78,14 @@ struct ZeroFSProbeTool {
             case .success, .degraded:
                 return
             case .failed:
-                terminate(1)
+                throw ProbeToolExit.code(1)
             case .skipped:
-                terminate(75)
+                throw ProbeToolExit.code(75)
             }
         } catch ProbeToolError.helpRequested {
             print(ProbeToolArguments.usage)
+        } catch ProbeToolExit.code(let code) {
+            terminate(code)
         } catch {
             fputs("ZeroFSProbeTool: \(error)\n", stderr)
             terminate(2)
@@ -99,6 +101,10 @@ struct ZeroFSProbeTool {
         try FileHandle.standardOutput.write(contentsOf: Data("\n".utf8))
     }
 
+}
+
+private enum ProbeToolExit: Error {
+    case code(Int32)
 }
 
 private struct ProbeToolArguments {
