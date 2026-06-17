@@ -22,7 +22,7 @@ jobs:
         run: swift build
 
       - name: Run Swift tests
-        run: swift test
+        run: swift test --enable-xctest
 
       - name: Run probe regression tests
         run: swift run ZeroFSProbeTests
