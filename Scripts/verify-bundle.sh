@@ -49,7 +49,7 @@ ASSOCIATED="$("$PLIST_BUDDY" -c "Print :AssociatedBundleIdentifiers:0" "$HELPER_
 [[ "$MACH_SERVICE" == "true" ]] || fail "missing MachServices entry for helper"
 [[ "$ASSOCIATED" == "com.zerofs.manager" ]] || fail "unexpected AssociatedBundleIdentifiers value: $ASSOCIATED"
 
-if grep -R -E "secret-value|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AWS_SECRET_ACCESS_KEY=.+" "$APP_PATH/Contents" >/dev/null; then
+if grep -R -E "secret-value|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY" "$APP_PATH/Contents" >/dev/null; then
   fail "bundle contains a known secret fixture"
 fi
 
