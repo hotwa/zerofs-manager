@@ -81,6 +81,8 @@ This emits ad-hoc signed dev artifacts and a README warning that Gatekeeper may 
 
 For the free GitHub edition, this is the supported low-friction distribution track. Users install ZeroFS separately, then manually authorize `sudo` when they want the app/scripts to install launchd files, start/stop ZeroFS, mount/unmount NFS, or run privileged diagnostics. This can cover real S3 mounting and testing without Apple Developer ID, but it does not provide the no-warning installation experience of notarized Developer ID software.
 
+The GitHub edition may use the in-app `Apply & Restart LaunchDaemon` action to install/update a per-profile sudo LaunchDaemon. Dynamic values belong in root-owned `zerofs.toml` and `zerofs.env`; the plist labels and wrapper scripts stay stable. Re-run the action after parameter changes so launchd reloads the profile.
+
 The GitHub edition should describe the installed ZeroFS version as a compatibility diagnostic. The currently tested baseline is `zerofs 1.2.6`; it is not bundled, pinned, or required when a compatible newer upstream ZeroFS is installed.
 
 ## Apple References

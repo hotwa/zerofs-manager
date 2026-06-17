@@ -12,6 +12,7 @@ The default mode is `github-dev`.
 - Developer ID, notarization, stapling, Gatekeeper approval, and formal `SMAppService` helper registration are release-only.
 - The app can save profiles, redact secrets, detect `zerofs`, check endpoint reachability, and guide manual real-mount tests.
 - Technical users can authorize `sudo` manually for the free GitHub build to install or remove launchd files, mount or unmount NFS, run ZeroFS, and perform read/write performance tests through reviewed scripts.
+- GitHub builds support per-profile sudo `LaunchDaemon` management. The app writes profile parameters to root-owned config/env files and restarts the matching daemon when the user clicks `Apply & Restart LaunchDaemon`.
 - `TeamIdentifier=not set`, `0 valid identities found`, `SMAppServiceErrorDomain Code=3`, and `security error -67056` do not block dev S3/ZeroFS CLI testing.
 
 ## ZeroFS Dependency
@@ -58,11 +59,15 @@ Use manual CLI/debug launchd paths to validate real S3/MinIO/R2 mounting, read/w
 ```sh
 Scripts/manual-mount-test.sh --env .env.local --delete-env-on-exit
 Scripts/manual-performance-test.sh --mount-point /Volumes/ZeroFS-Test --size 128M
+Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-exit
+Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id lingyuzeng --mount-point /Volumes/ZeroFS-lingyuzeng
 ```
 
 These paths are for lower-level development testing and are not equivalent to official macOS helper authorization.
 
 For GitHub free distribution, these manual sudo paths are the intended way to enable privileged operations without Apple Developer ID. They still require users to approve macOS prompts and understand that Gatekeeper may warn on first launch.
+
+The persistent auto-mount path keeps plist files stable and stores all changing profile parameters in `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>/zerofs.toml` plus a root-only `zerofs.env`. After changing endpoint, bucket, prefix, mount directory, ports, cache, quota, or credentials, use the in-app `Apply & Restart LaunchDaemon` action so launchd reloads the profile.
 
 ## Official Release
 

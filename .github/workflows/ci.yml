@@ -30,9 +30,11 @@ jobs:
             Scripts/build-app.sh \
             Scripts/inspect-signature.sh \
             Scripts/manual-install-launchdaemon-debug.sh \
+            Scripts/manual-install-profile-launchdaemon.sh \
             Scripts/manual-mount-test.sh \
             Scripts/manual-performance-test.sh \
             Scripts/manual-uninstall-launchdaemon-debug.sh \
+            Scripts/manual-uninstall-profile-launchdaemon.sh \
             Scripts/notarize-dmg.sh \
             Scripts/package-github-dev.sh \
             Scripts/sign-app-adhoc.sh \

@@ -763,10 +763,18 @@ struct ZeroFSManagerChecks {
         let buildAppScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/build-app.sh"), encoding: .utf8)
         checks.expect(buildAppScript.contains("codesign --force --deep --sign -"), "local app build ad-hoc signs the complete bundle")
         checks.expect(buildAppScript.contains("Contents/Resources/Scripts"), "app bundle includes dev helper scripts as resources")
+        checks.expect(buildAppScript.contains("manual-install-profile-launchdaemon.sh"), "app bundle includes sudo profile launchd installer")
+        checks.expect(buildAppScript.contains("manual-uninstall-profile-launchdaemon.sh"), "app bundle includes sudo profile launchd uninstaller")
         checks.expect(buildAppScript.contains("Contents/Resources/LICENSE.txt"), "app bundle includes Apache license text")
         let rootViewSource = try String(contentsOf: projectRoot.appendingPathComponent("Sources/ZeroFSManagerUI/ZeroFSManagerRootView.swift"), encoding: .utf8)
         checks.expect(rootViewSource.contains("--env /path/to/.env.local --delete-env-on-exit"), "copy CLI command uses a safe env template instead of writing secrets")
         checks.expect(rootViewSource.contains("LocalPerformanceHelper"), "GitHub-style dev performance tests can run against an existing local mount without helper registration")
+        checks.expect(rootViewSource.contains("installOrUpdateLaunchDaemon"), "GitHub-style dev UI can install or update sudo LaunchDaemons")
+        checks.expect(rootViewSource.contains("uninstallLaunchDaemon"), "GitHub-style dev UI can remove sudo LaunchDaemons")
+        checks.expect(rootViewSource.contains("PrivilegedMountPathPolicy"), "GitHub-style dev sudo LaunchDaemon path enforces privileged mount path policy")
+        checks.expect(rootViewSource.contains("writeLaunchDaemonEnv"), "GitHub-style dev UI writes profile launchd env outside the repo")
+        checks.expect(rootViewSource.contains("manual-install-profile-launchdaemon.sh"), "GitHub-style dev UI calls the sudo profile launchd installer")
+        checks.expect(rootViewSource.contains("zerofs-manager-public/Scripts"), "GitHub-style dev UI can find scripts from the public repo checkout")
         checks.expect(rootViewSource.contains("MountFailureRecovery.classify"), "mount failure dialogs classify recovery actions by failure type")
         checks.expect(rootViewSource.contains("case .credentials"), "missing credential failures avoid helper approval guidance")
         checks.expect(rootViewSource.contains("@AppStorage(AppLanguage.storageKey)"), "app persists selected UI language")
@@ -779,10 +787,15 @@ struct ZeroFSManagerChecks {
             checks.expect(localizationSource.contains(marker), "localization includes \(marker) display name")
         }
         checks.expect(localizationSource.contains("GitHub-style development build"), "localization keeps English GitHub distribution copy")
+        checks.expect(localizationSource.contains("Apply & Restart LaunchDaemon"), "localization includes English sudo launchd copy")
         checks.expect(localizationSource.contains("GitHub 风格开发版"), "localization includes Simplified Chinese GitHub distribution copy")
+        checks.expect(localizationSource.contains("应用并重启 LaunchDaemon"), "localization includes Simplified Chinese sudo launchd copy")
         checks.expect(localizationSource.contains("GitHub 風格開發版"), "localization includes Traditional Chinese GitHub distribution copy")
+        checks.expect(localizationSource.contains("套用並重啟 LaunchDaemon"), "localization includes Traditional Chinese sudo launchd copy")
         checks.expect(localizationSource.contains("GitHub 形式の開発ビルド"), "localization includes Japanese GitHub distribution copy")
+        checks.expect(localizationSource.contains("適用して LaunchDaemon を再起動"), "localization includes Japanese sudo launchd copy")
         checks.expect(localizationSource.contains("GitHub 스타일 개발 빌드"), "localization includes Korean GitHub distribution copy")
+        checks.expect(localizationSource.contains("적용 후 LaunchDaemon 재시작"), "localization includes Korean sudo launchd copy")
         let verifyBundleScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/verify-bundle.sh"), encoding: .utf8)
         checks.expect(verifyBundleScript.contains("codesign --verify --deep --strict"), "bundle verification enforces strict codesign")
         let requiredDevScripts = [
@@ -792,6 +805,8 @@ struct ZeroFSManagerChecks {
             "manual-mount-test.sh",
             "manual-install-launchdaemon-debug.sh",
             "manual-uninstall-launchdaemon-debug.sh",
+            "manual-install-profile-launchdaemon.sh",
+            "manual-uninstall-profile-launchdaemon.sh",
             "sign-app-developer-id.sh",
             "notarize-dmg.sh",
             "verify-release.sh"
@@ -816,6 +831,21 @@ struct ZeroFSManagerChecks {
         checks.expect(manualPerformanceScript.contains("--allow-non-zerofs-mount"), "manual performance test protects against accidental non-ZeroFS mount points")
         checks.expect(manualPerformanceScript.contains("Invalid --size"), "manual performance test reports invalid sizes cleanly")
         checks.expect(manualPerformanceScript.contains("small files"), "manual performance test covers small file operations")
+        let profileInstallScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-install-profile-launchdaemon.sh"), encoding: .utf8)
+        checks.expect(profileInstallScript.contains("launchctl bootstrap system"), "profile launchd installer bootstraps system LaunchDaemons")
+        checks.expect(profileInstallScript.contains("launchctl kickstart -k"), "profile launchd installer restarts the profile jobs after config changes")
+        checks.expect(profileInstallScript.contains("ZEROFS_MOUNT_POINT"), "profile launchd installer stores the selected mount point in config")
+        checks.expect(profileInstallScript.contains("Refusing unsafe ZEROFS_MOUNT_POINT"), "profile launchd installer rejects unsafe mount points")
+        checks.expect(profileInstallScript.contains("^[a-z0-9][a-z0-9-]{0,62}$"), "profile launchd installer uses app-compatible profile ids")
+        checks.expect(profileInstallScript.contains("install -o root -g wheel -m 0600"), "profile launchd installer stores secrets in root-only env file")
+        checks.expect(profileInstallScript.contains("RunAtLoad"), "profile launchd installer enables startup behavior")
+        checks.expect(profileInstallScript.contains("StartInterval"), "profile launchd mount job retries mount readiness")
+        let profileUninstallScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/manual-uninstall-profile-launchdaemon.sh"), encoding: .utf8)
+        checks.expect(profileUninstallScript.contains("launchctl bootout system"), "profile launchd uninstaller stops system LaunchDaemons")
+        checks.expect(profileUninstallScript.contains("is_safe_mount_point"), "profile launchd uninstaller validates mount points before unmounting")
+        checks.expect(profileUninstallScript.contains("^[a-z0-9][a-z0-9-]{0,62}$"), "profile launchd uninstaller uses app-compatible profile ids")
+        checks.expect(profileUninstallScript.contains("sudo rm -f \"$MOUNT_PLIST\" \"$RUNTIME_PLIST\""), "profile launchd uninstaller removes installed plists")
+        checks.expect(profileUninstallScript.contains("--keep-runtime"), "profile launchd uninstaller can preserve runtime files for debugging")
         let githubDevPackageScript = try String(contentsOf: projectRoot.appendingPathComponent("Scripts/package-github-dev.sh"), encoding: .utf8)
         checks.expect(githubDevPackageScript.contains("--help"), "github-dev package script supports help without building")
         checks.expect(githubDevPackageScript.contains("VERIFY_CODESIGN=0"), "github-dev unsigned package mode bypasses strict bundle codesign only when requested")

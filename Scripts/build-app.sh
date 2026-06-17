@@ -67,7 +67,7 @@ cp "$PROJECT_ROOT/Resources/Templates/zerofs.env.template" \
   "$APP_PATH/Contents/Resources/Templates/zerofs.env.template"
 cp "$PROJECT_ROOT/Resources/Entitlements/"*.entitlements \
   "$APP_PATH/Contents/Resources/Entitlements/"
-for script in manual-mount-test.sh manual-performance-test.sh manual-install-launchdaemon-debug.sh manual-uninstall-launchdaemon-debug.sh inspect-signature.sh; do
+for script in manual-mount-test.sh manual-performance-test.sh manual-install-launchdaemon-debug.sh manual-uninstall-launchdaemon-debug.sh manual-install-profile-launchdaemon.sh manual-uninstall-profile-launchdaemon.sh inspect-signature.sh; do
   if [[ -f "$PROJECT_ROOT/Scripts/$script" ]]; then
     cp "$PROJECT_ROOT/Scripts/$script" "$APP_PATH/Contents/Resources/Scripts/$script"
     chmod 755 "$APP_PATH/Contents/Resources/Scripts/$script"

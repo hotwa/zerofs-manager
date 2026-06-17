@@ -221,6 +221,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .releaseOnly: "Release-only",
             .enableAutoMount: "Enable Auto Mount",
             .devAutoMountDisabled: "Auto Mount is disabled in GitHub-style dev mode so launch does not trigger SMAppService or privileged helper registration.",
+            .sudoLaunchDaemon: "sudo LaunchDaemon",
+            .applyRestartLaunchDaemon: "Apply & Restart LaunchDaemon",
+            .removeLaunchDaemon: "Remove LaunchDaemon",
+            .githubDevLaunchDaemonNote: "GitHub builds use reviewed sudo scripts. Current profile parameters are written to root-owned config/env files, then the matching LaunchDaemon is restarted.",
             .quota: "Quota",
             .performanceTest: "Performance Test",
             .cache: "Cache",
@@ -305,6 +309,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .cliCommandCopiedBody: "Copied a safe template command. Create the env file outside the repo and keep it 0600.",
             .manualMountTestTitle: "Manual Mount Test",
             .manualMountTestBody: "Opened Terminal with a local env file. Script output redacts S3 secrets.",
+            .launchDaemonInstallTitle: "LaunchDaemon Update Started",
+            .launchDaemonInstallBody: "Terminal opened the sudo installer. Approve it to write root-owned config and restart this profile.",
+            .launchDaemonUninstallTitle: "LaunchDaemon Removal Started",
+            .launchDaemonUninstallBody: "Terminal opened the sudo uninstaller for this profile.",
             .profileSaveFailedTitle: "Profile Save Failed",
             .performanceTestTitle: "Performance Test",
             .recentHelperLogs: "Recent helper logs",
@@ -349,6 +357,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .releaseOnly: "仅正式版",
             .enableAutoMount: "启用自动挂载",
             .devAutoMountDisabled: "GitHub 开发版禁用自动挂载，避免启动时触发 SMAppService 或特权 helper 注册。",
+            .sudoLaunchDaemon: "sudo LaunchDaemon",
+            .applyRestartLaunchDaemon: "应用并重启 LaunchDaemon",
+            .removeLaunchDaemon: "移除 LaunchDaemon",
+            .githubDevLaunchDaemonNote: "GitHub 版使用已审查的 sudo 脚本。当前配置参数会写入 root 拥有的 config/env 文件，然后重启对应的 LaunchDaemon。",
             .quota: "配额",
             .performanceTest: "性能测试",
             .cache: "缓存",
@@ -433,6 +445,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .cliCommandCopiedBody: "已复制安全模板命令。请在仓库外创建 env 文件并保持 0600 权限。",
             .manualMountTestTitle: "手动挂载测试",
             .manualMountTestBody: "已用本地 env 文件打开 Terminal。脚本输出会隐藏 S3 密钥。",
+            .launchDaemonInstallTitle: "LaunchDaemon 更新已开始",
+            .launchDaemonInstallBody: "已在 Terminal 打开 sudo 安装器。授权后会写入 root 配置并重启此 profile。",
+            .launchDaemonUninstallTitle: "LaunchDaemon 移除已开始",
+            .launchDaemonUninstallBody: "已在 Terminal 为此 profile 打开 sudo 卸载器。",
             .profileSaveFailedTitle: "配置保存失败",
             .performanceTestTitle: "性能测试",
             .recentHelperLogs: "最近 helper 日志",
@@ -477,6 +493,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .releaseOnly: "僅正式版",
             .enableAutoMount: "啟用自動掛載",
             .devAutoMountDisabled: "GitHub 開發版停用自動掛載，避免啟動時觸發 SMAppService 或特權 helper 註冊。",
+            .sudoLaunchDaemon: "sudo LaunchDaemon",
+            .applyRestartLaunchDaemon: "套用並重啟 LaunchDaemon",
+            .removeLaunchDaemon: "移除 LaunchDaemon",
+            .githubDevLaunchDaemonNote: "GitHub 版使用已審查的 sudo 腳本。目前設定參數會寫入 root 擁有的 config/env 檔案，然後重啟對應的 LaunchDaemon。",
             .quota: "配額",
             .performanceTest: "效能測試",
             .cache: "快取",
@@ -561,6 +581,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .cliCommandCopiedBody: "已複製安全模板命令。請在倉庫外建立 env 檔案並保持 0600 權限。",
             .manualMountTestTitle: "手動掛載測試",
             .manualMountTestBody: "已用本機 env 檔案開啟 Terminal。腳本輸出會遮蔽 S3 密鑰。",
+            .launchDaemonInstallTitle: "LaunchDaemon 更新已開始",
+            .launchDaemonInstallBody: "已在 Terminal 開啟 sudo 安裝器。授權後會寫入 root 設定並重啟此 profile。",
+            .launchDaemonUninstallTitle: "LaunchDaemon 移除已開始",
+            .launchDaemonUninstallBody: "已在 Terminal 為此 profile 開啟 sudo 解除安裝器。",
             .profileSaveFailedTitle: "設定儲存失敗",
             .performanceTestTitle: "效能測試",
             .recentHelperLogs: "最近 helper 日誌",
@@ -605,6 +629,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .releaseOnly: "正式版のみ",
             .enableAutoMount: "自動マウントを有効化",
             .devAutoMountDisabled: "GitHub 開発版では、起動時に SMAppService や特権 helper 登録を起動しないよう自動マウントを無効化しています。",
+            .sudoLaunchDaemon: "sudo LaunchDaemon",
+            .applyRestartLaunchDaemon: "適用して LaunchDaemon を再起動",
+            .removeLaunchDaemon: "LaunchDaemon を削除",
+            .githubDevLaunchDaemonNote: "GitHub ビルドではレビュー済みの sudo スクリプトを使います。現在のプロファイル設定を root 所有の config/env に書き込み、対応する LaunchDaemon を再起動します。",
             .quota: "クォータ",
             .performanceTest: "性能テスト",
             .cache: "キャッシュ",
@@ -689,6 +717,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .cliCommandCopiedBody: "安全なテンプレートコマンドをコピーしました。repo 外に env ファイルを作成し、0600 を維持してください。",
             .manualMountTestTitle: "手動マウントテスト",
             .manualMountTestBody: "ローカル env ファイルで Terminal を開きました。スクリプト出力では S3 シークレットがマスクされます。",
+            .launchDaemonInstallTitle: "LaunchDaemon 更新を開始",
+            .launchDaemonInstallBody: "Terminal で sudo インストーラを開きました。承認すると root 所有の設定を書き込み、このプロファイルを再起動します。",
+            .launchDaemonUninstallTitle: "LaunchDaemon 削除を開始",
+            .launchDaemonUninstallBody: "このプロファイル用の sudo アンインストーラを Terminal で開きました。",
             .profileSaveFailedTitle: "プロファイル保存失敗",
             .performanceTestTitle: "性能テスト",
             .recentHelperLogs: "最近の helper ログ",
@@ -733,6 +765,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .releaseOnly: "정식 릴리스 전용",
             .enableAutoMount: "자동 마운트 활성화",
             .devAutoMountDisabled: "GitHub 개발 빌드에서는 시작 시 SMAppService 또는 권한 helper 등록을 트리거하지 않도록 자동 마운트를 비활성화합니다.",
+            .sudoLaunchDaemon: "sudo LaunchDaemon",
+            .applyRestartLaunchDaemon: "적용 후 LaunchDaemon 재시작",
+            .removeLaunchDaemon: "LaunchDaemon 제거",
+            .githubDevLaunchDaemonNote: "GitHub 빌드는 검토된 sudo 스크립트를 사용합니다. 현재 프로필 매개변수를 root 소유 config/env 파일에 쓴 뒤 해당 LaunchDaemon을 재시작합니다.",
             .quota: "할당량",
             .performanceTest: "성능 테스트",
             .cache: "캐시",
@@ -817,6 +853,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             .cliCommandCopiedBody: "안전한 템플릿 명령을 복사했습니다. repo 밖에 env 파일을 만들고 0600 권한을 유지하세요.",
             .manualMountTestTitle: "수동 마운트 테스트",
             .manualMountTestBody: "로컬 env 파일로 Terminal을 열었습니다. 스크립트 출력은 S3 시크릿을 마스킹합니다.",
+            .launchDaemonInstallTitle: "LaunchDaemon 업데이트 시작됨",
+            .launchDaemonInstallBody: "Terminal에서 sudo 설치 스크립트를 열었습니다. 승인하면 root 소유 설정을 쓰고 이 프로필을 재시작합니다.",
+            .launchDaemonUninstallTitle: "LaunchDaemon 제거 시작됨",
+            .launchDaemonUninstallBody: "이 프로필의 sudo 제거 스크립트를 Terminal에서 열었습니다.",
             .profileSaveFailedTitle: "프로필 저장 실패",
             .performanceTestTitle: "성능 테스트",
             .recentHelperLogs: "최근 helper 로그",
@@ -864,6 +904,10 @@ enum AppTextKey: String, CaseIterable {
     case releaseOnly
     case enableAutoMount
     case devAutoMountDisabled
+    case sudoLaunchDaemon
+    case applyRestartLaunchDaemon
+    case removeLaunchDaemon
+    case githubDevLaunchDaemonNote
     case quota
     case performanceTest
     case cache
@@ -948,6 +992,10 @@ enum AppTextKey: String, CaseIterable {
     case cliCommandCopiedBody
     case manualMountTestTitle
     case manualMountTestBody
+    case launchDaemonInstallTitle
+    case launchDaemonInstallBody
+    case launchDaemonUninstallTitle
+    case launchDaemonUninstallBody
     case profileSaveFailedTitle
     case performanceTestTitle
     case recentHelperLogs

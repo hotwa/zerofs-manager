@@ -22,9 +22,33 @@ Use:
 ```sh
 Scripts/manual-mount-test.sh --env .env.local --delete-env-on-exit
 Scripts/manual-performance-test.sh --mount-point /Volumes/ZeroFS-Test --size 128M
+Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-exit
 ```
 
 Manual CLI and debug launchd testing is not equivalent to official `SMAppService` authorization.
+
+## sudo LaunchDaemon Profile Does Not Apply Changes
+
+GitHub-dev auto-mount uses root-owned profile config rather than rewriting plist files for every parameter change. This is intentional.
+
+Expected layout:
+
+- plist files: `/Library/LaunchDaemons/com.zerofs.manager.profile.<profile-id>.zerofs.plist` and `.mount.plist`
+- config: `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>/zerofs.toml`
+- secrets/env: `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>/zerofs.env`
+- logs: `/Library/Logs/ZeroFSManager/<profile-id>/zerofs.log`
+
+After changing endpoint, bucket, prefix, mount directory, ports, cache, quota, or credentials, click `Apply & Restart LaunchDaemon` in the app or rerun:
+
+```sh
+Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-exit
+```
+
+To remove the persistent profile daemon:
+
+```sh
+Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id lingyuzeng --mount-point /Volumes/ZeroFS-lingyuzeng
+```
 
 ## Helper Requires Approval
 

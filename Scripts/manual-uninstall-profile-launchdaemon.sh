@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROFILE_ID=""
+MOUNT_POINT=""
+KEEP_RUNTIME=0
+
+usage() {
+  cat <<'USAGE'
+Usage: Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id PROFILE_ID [--mount-point /Volumes/ZeroFS-Name] [--keep-runtime]
+
+Removes a GitHub-style sudo-authorized LaunchDaemon profile. By default it
+stops launchd jobs, unmounts the profile mount point when known, removes plist
+files, and deletes the root-owned runtime directory containing secrets.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile-id)
+      PROFILE_ID="${2:-}"
+      shift 2
+      ;;
+    --mount-point)
+      MOUNT_POINT="${2:-}"
+      shift 2
+      ;;
+    --keep-runtime)
+      KEEP_RUNTIME=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ -n "$PROFILE_ID" ]] || {
+  echo "Missing --profile-id" >&2
+  usage >&2
+  exit 2
+}
+
+[[ "$PROFILE_ID" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || {
+  echo "Invalid profile id: $PROFILE_ID" >&2
+  exit 2
+}
+
+is_safe_mount_point() {
+  local path="$1"
+  [[ "$path" == /Volumes/* ]] || return 1
+  [[ "$path" != "/Volumes/" ]] || return 1
+  [[ "$path" != *"//"* ]] || return 1
+  [[ "$path" != *"/../"* && "$path" != *"/.." ]] || return 1
+  [[ "$path" != *"/./"* && "$path" != *"/." ]] || return 1
+}
+
+LABEL_PREFIX="com.zerofs.manager.profile.$PROFILE_ID"
+RUNTIME_LABEL="$LABEL_PREFIX.zerofs"
+MOUNT_LABEL="$LABEL_PREFIX.mount"
+PROFILE_ROOT="/Library/Application Support/ZeroFSManager/Profiles/$PROFILE_ID"
+CACHE_DIR="/var/cache/zerofs-manager/$PROFILE_ID"
+LOG_ROOT="/Library/Logs/ZeroFSManager/$PROFILE_ID"
+ENV_PATH="$PROFILE_ROOT/zerofs.env"
+RUNTIME_PLIST="/Library/LaunchDaemons/$RUNTIME_LABEL.plist"
+MOUNT_PLIST="/Library/LaunchDaemons/$MOUNT_LABEL.plist"
+
+if [[ -n "$MOUNT_POINT" ]] && ! is_safe_mount_point "$MOUNT_POINT"; then
+  echo "Refusing unsafe mount point: $MOUNT_POINT" >&2
+  exit 2
+fi
+
+echo "Removing ZeroFS Manager LaunchDaemons for profile: $PROFILE_ID"
+sudo -v
+
+if [[ -z "$MOUNT_POINT" ]] && sudo test -f "$ENV_PATH"; then
+  MOUNT_POINT="$(sudo /bin/zsh -c 'source "$1"; printf "%s" "${ZEROFS_MOUNT_POINT:-}"' zerofs-manager "$ENV_PATH" 2>/dev/null || true)"
+fi
+
+sudo launchctl bootout system "$MOUNT_PLIST" >/dev/null 2>&1 || true
+sudo launchctl bootout system "$RUNTIME_PLIST" >/dev/null 2>&1 || true
+
+if [[ -n "$MOUNT_POINT" ]] && ! is_safe_mount_point "$MOUNT_POINT"; then
+  echo "Refusing unsafe mount point: $MOUNT_POINT" >&2
+  exit 2
+fi
+
+if [[ -n "$MOUNT_POINT" ]] && /sbin/mount | /usr/bin/grep -Fq " on $MOUNT_POINT "; then
+  echo "Unmounting: $MOUNT_POINT"
+  sudo /sbin/umount "$MOUNT_POINT" >/dev/null 2>&1 || true
+fi
+
+sudo rm -f "$MOUNT_PLIST" "$RUNTIME_PLIST"
+
+if [[ "$KEEP_RUNTIME" != "1" ]]; then
+  case "$PROFILE_ROOT" in
+    "/Library/Application Support/ZeroFSManager/Profiles/$PROFILE_ID")
+      sudo rm -rf "$PROFILE_ROOT"
+      ;;
+  esac
+  case "$CACHE_DIR" in
+    "/var/cache/zerofs-manager/$PROFILE_ID")
+      sudo rm -rf "$CACHE_DIR"
+      ;;
+  esac
+  case "$LOG_ROOT" in
+    "/Library/Logs/ZeroFSManager/$PROFILE_ID")
+      sudo rm -rf "$LOG_ROOT"
+      ;;
+  esac
+fi
+
+echo "Removed:"
+echo "  $RUNTIME_LABEL"
+echo "  $MOUNT_LABEL"

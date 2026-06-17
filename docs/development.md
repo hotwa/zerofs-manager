@@ -12,8 +12,8 @@ In this mode:
 - `TeamIdentifier=not set` is expected,
 - `spctl` can fail or be inconclusive,
 - `SMAppService` privileged helper registration is not triggered automatically,
-- login auto-mount is disabled,
-- real S3/MinIO/R2 testing goes through manual CLI or debug launchd scripts.
+- release-only login auto-mount is disabled,
+- real S3/MinIO/R2 testing goes through manual CLI, debug launchd scripts, or the sudo profile `LaunchDaemon` path.
 
 ### Manual CLI / debug launchd test
 
@@ -120,6 +120,15 @@ The GitHub free/dev build can support most practical features when the user manu
 - inspect `df`, mount table state, and bounded logs
 
 This path is intended for technical users. It is not equivalent to Developer ID notarization or formal `SMAppService` helper registration, and macOS may still show Gatekeeper or administrator-password prompts.
+
+For persistent auto-mount without Developer ID, use the profile daemon scripts:
+
+```sh
+Scripts/manual-install-profile-launchdaemon.sh --env .env.local --delete-env-on-exit
+Scripts/manual-uninstall-profile-launchdaemon.sh --profile-id lingyuzeng --mount-point /Volumes/ZeroFS-lingyuzeng
+```
+
+The best-practice layout is a stable pair of plist files under `/Library/LaunchDaemons` plus dynamic profile config under `/Library/Application Support/ZeroFSManager/Profiles/<profile-id>`. The runtime plist runs `run-zerofs.sh`; the mount plist runs `mount-zerofs.sh`. All user-adjustable values such as endpoint, bucket, prefix, mount directory, ports, cache, quota, and credentials are written to `zerofs.toml` and root-only `zerofs.env`. After a profile parameter changes, the app opens Terminal for the sudo installer again, which rewrites config/env, bootouts existing jobs, bootstraps them, and kickstarts the matching profile.
 
 ## Manual Real Mount Testing
 

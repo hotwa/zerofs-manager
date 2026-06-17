@@ -239,16 +239,21 @@ private struct ProfileDetailView: View {
                     } else {
                         LabeledContent(language.text(.autoMount)) {
                             HStack(spacing: 8) {
-                                Text(language.text(.releaseOnly))
+                                Text(language.text(.sudoLaunchDaemon))
                                     .foregroundStyle(.secondary)
                                 Button {
-                                    model.showDevModeGuidance(for: profile.id)
+                                    Task { await model.installOrUpdateLaunchDaemon(profile.id) }
                                 } label: {
-                                    Label(language.text(.enableAutoMount), systemImage: "bolt.fill")
+                                    Label(language.text(.applyRestartLaunchDaemon), systemImage: "arrow.triangle.2.circlepath")
+                                }
+                                Button {
+                                    Task { await model.uninstallLaunchDaemon(profile.id) }
+                                } label: {
+                                    Label(language.text(.removeLaunchDaemon), systemImage: "trash")
                                 }
                             }
                         }
-                        Text(language.text(.devAutoMountDisabled))
+                        Text(language.text(.githubDevLaunchDaemonNote))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -919,7 +924,11 @@ final class ZeroFSManagerViewModel: ObservableObject {
     func toggleMount(_ id: ProfileID) async {
         guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
         var profile = profiles[index]
-        let issues = validationIssues(for: profile)
+        let baseIssues = validationIssues(for: profile)
+        let privilegedIssues = PrivilegedMountPathPolicy()
+            .issues(for: profile.mountProfile.mountPath)
+            .filter { !baseIssues.contains($0) }
+        let issues = baseIssues + privilegedIssues
         guard issues.isEmpty else {
             recordMountFailure(
                 profileID: id,
@@ -1086,17 +1095,83 @@ final class ZeroFSManagerViewModel: ObservableObject {
             let envURL = try writeManualEnv(for: profile)
             let scriptURL = try manualScriptURL(named: "manual-mount-test.sh")
             let command = "cd \(shellQuote(scriptURL.deletingLastPathComponent().path)) && \(shellQuote(scriptURL.path)) --env \(shellQuote(envURL.path)) --delete-env-on-exit"
-            let source = """
-            tell application "Terminal"
-              activate
-              do script \(appleScriptString(command))
-            end tell
-            """
-            var error: NSDictionary?
-            guard NSAppleScript(source: source)?.executeAndReturnError(&error) != nil else {
-                throw DevModeManualTestError.terminalLaunchFailed(error?.description ?? "unknown AppleScript error")
-            }
+            try openTerminal(command: command)
             notifications.append(MountNotification(profileID: id, title: language.text(.manualMountTestTitle), body: language.text(.manualMountTestBody)))
+        } catch let error as DevModeManualTestError {
+            recordMountFailure(profileID: id, message: error.description(language: language), recovery: error.recovery)
+        } catch {
+            recordMountFailure(profileID: id, message: redacted(String(describing: error), for: profile))
+        }
+    }
+
+    func installOrUpdateLaunchDaemon(_ id: ProfileID) async {
+        guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+        let profile = profiles[index]
+        let baseIssues = validationIssues(for: profile)
+        let privilegedIssues = PrivilegedMountPathPolicy()
+            .issues(for: profile.mountProfile.mountPath)
+            .filter { !baseIssues.contains($0) }
+        let issues = baseIssues + privilegedIssues
+        guard issues.isEmpty else {
+            recordMountFailure(
+                profileID: id,
+                message: language.profileValidationFailed(issues.map { $0.description(language: language) }),
+                recovery: .general
+            )
+            return
+        }
+
+        do {
+            guard zeroFSBinary != nil else {
+                recordMountFailure(
+                    profileID: id,
+                    message: language.zeroFSMissingInstallBody(command: ZeroFSInstallGuidance.recommendedShellCommand),
+                    recovery: .dependency
+                )
+                return
+            }
+            let missingSecrets = try missingRuntimeSecrets(for: profile)
+            guard missingSecrets.isEmpty else {
+                recordMountFailure(
+                    profileID: id,
+                    message: language.missingRequiredSecrets(missingSecrets, autoMount: true),
+                    recovery: .credentials
+                )
+                return
+            }
+            try saveRuntimeSecrets(for: profile)
+            let envURL = try writeLaunchDaemonEnv(for: profile)
+            let scriptURL = try manualScriptURL(named: "manual-install-profile-launchdaemon.sh")
+            let command = "cd \(shellQuote(scriptURL.deletingLastPathComponent().path)) && \(shellQuote(scriptURL.path)) --env \(shellQuote(envURL.path)) --delete-env-on-exit"
+            try openTerminal(command: command)
+            profiles[index].lastError = language.text(.launchDaemonInstallBody)
+            notifications.append(MountNotification(
+                profileID: id,
+                title: language.text(.launchDaemonInstallTitle),
+                body: language.text(.launchDaemonInstallBody)
+            ))
+        } catch let error as DevModeManualTestError {
+            recordMountFailure(profileID: id, message: error.description(language: language), recovery: error.recovery)
+        } catch {
+            recordMountFailure(profileID: id, message: redacted(String(describing: error), for: profile))
+        }
+    }
+
+    func uninstallLaunchDaemon(_ id: ProfileID) async {
+        guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+        let profile = profiles[index]
+        do {
+            let scriptURL = try manualScriptURL(named: "manual-uninstall-profile-launchdaemon.sh")
+            let command = "cd \(shellQuote(scriptURL.deletingLastPathComponent().path)) && \(shellQuote(scriptURL.path)) --profile-id \(shellQuote(profile.id.rawValue)) --mount-point \(shellQuote(profile.mountPath))"
+            try openTerminal(command: command)
+            profiles[index].status = .unmounted
+            profiles[index].serviceState = .stopped
+            profiles[index].lastError = language.text(.launchDaemonUninstallBody)
+            notifications.append(MountNotification(
+                profileID: id,
+                title: language.text(.launchDaemonUninstallTitle),
+                body: language.text(.launchDaemonUninstallBody)
+            ))
         } catch let error as DevModeManualTestError {
             recordMountFailure(profileID: id, message: error.description(language: language), recovery: error.recovery)
         } catch {
@@ -1379,15 +1454,65 @@ final class ZeroFSManagerViewModel: ObservableObject {
         return envURL
     }
 
+    private func writeLaunchDaemonEnv(for profile: EditableMountProfile) throws -> URL {
+        let accessKey = try resolvedSecret(profile.accessKey, kind: .s3AccessKeyID, profileID: profile.id)
+        let secretKey = try resolvedSecret(profile.secretKey, kind: .s3SecretAccessKey, profileID: profile.id)
+        let password = try resolvedSecret(profile.encryptionPassword, kind: .zeroFSEncryptionPassword, profileID: profile.id)
+        guard !accessKey.isEmpty, !secretKey.isEmpty, !password.isEmpty else {
+            throw DevModeManualTestError.missingSecrets
+        }
+        let baseDirectory = FileManager.default
+            .temporaryDirectory
+            .appendingPathComponent("ZeroFSManager/LaunchDaemonProfiles", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let envURL = baseDirectory.appendingPathComponent("\(profile.id.rawValue)-\(UUID().uuidString).env")
+        let contents = """
+        ZEROFS_PROFILE_ID=\(shellQuote(profile.id.rawValue))
+        ZEROFS_DISPLAY_NAME=\(shellQuote(profile.displayName))
+        ZEROFS_BIN=\(shellQuote(zeroFSBinary?.path ?? "/usr/local/bin/zerofs"))
+        ZEROFS_MOUNT_POINT=\(shellQuote(profile.mountPath))
+        ZEROFS_NFS_PORT=\(profile.nfsPort)
+        ZEROFS_RPC_PORT=\(profile.rpcPort)
+        ZEROFS_METRICS_PORT=\(profile.metricsPort)
+        ZEROFS_QUOTA_GB=\(Int(profile.quotaGigabytes))
+        ZEROFS_DISK_CACHE_GB=\(Int(profile.diskCacheGigabytes))
+        ZEROFS_MEMORY_CACHE_GB=\(profile.memoryCacheGigabytes)
+        S3_ENDPOINT=\(shellQuote(profile.endpoint))
+        S3_BUCKET=\(shellQuote(profile.bucket))
+        S3_PREFIX=\(shellQuote(profile.prefix))
+        S3_REGION='us-east-1'
+        S3_ACCESS_KEY=\(shellQuote(accessKey))
+        S3_SECRET_KEY=\(shellQuote(secretKey))
+        ZEROFS_PASSWORD=\(shellQuote(password))
+        """
+        try contents.write(to: envURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: envURL.path)
+        return envURL
+    }
+
     private func manualScriptURL(named scriptName: String) throws -> URL {
         let candidates = [
             Bundle.main.resourceURL?.appendingPathComponent("Scripts/\(scriptName)"),
+            URL(fileURLWithPath: "/Users/lingyuzeng/project/zerofs-manager-public/Scripts/\(scriptName)"),
             URL(fileURLWithPath: "/Users/lingyuzeng/project/zerofs-manager/Scripts/\(scriptName)")
         ].compactMap { $0 }
         guard let scriptURL = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
             throw DevModeManualTestError.scriptNotFound(scriptName)
         }
         return scriptURL
+    }
+
+    private func openTerminal(command: String) throws {
+        let source = """
+        tell application "Terminal"
+          activate
+          do script \(appleScriptString(command))
+        end tell
+        """
+        var error: NSDictionary?
+        guard NSAppleScript(source: source)?.executeAndReturnError(&error) != nil else {
+            throw DevModeManualTestError.terminalLaunchFailed(error?.description ?? "unknown AppleScript error")
+        }
     }
 
     private func persistProfiles() {
